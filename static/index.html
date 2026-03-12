@@ -65,8 +65,98 @@
 
           <!-- Voice Note -->
           <div class="form-group">
-            <label>Voice Note <span class="optional">(optional)</span></label>
-            <div class="voice-section">
+            <label>Voice Notes <span class="optional">(optional)</span></label>
+
+            <!-- Mode Switcher -->
+            <div class="voice-mode-switcher">
+              <button type="button" class="voice-mode-tab active" data-mode="guided">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+                </svg>
+                Guided Prompts
+                <span class="mode-badge">Recommended</span>
+              </button>
+              <button type="button" class="voice-mode-tab" data-mode="freeform">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                  <line x1="12" x2="12" y1="19" y2="22"/>
+                </svg>
+                Free-form Recording
+              </button>
+            </div>
+
+            <!-- ===== GUIDED PROMPTS MODE ===== -->
+            <div id="guided-mode" class="voice-section">
+              <div class="guided-prompt-card">
+                <!-- Progress indicator -->
+                <div class="prompt-progress">
+                  <span id="prompt-counter" class="prompt-counter">1 of 6</span>
+                  <div class="prompt-dots" id="prompt-dots">
+                    <span class="dot active"></span><span class="dot"></span><span class="dot"></span>
+                    <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+                  </div>
+                </div>
+
+                <!-- Prompt question text -->
+                <p id="prompt-question" class="prompt-question">How many workers are on site today? What trades are present?</p>
+
+                <!-- Idle state: record button -->
+                <div id="guided-idle" class="guided-center">
+                  <button type="button" id="guided-record-btn" class="guided-mic-btn" aria-label="Record">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+                      <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                      <line x1="12" x2="12" y1="19" y2="22"/>
+                    </svg>
+                  </button>
+                  <span class="guided-hint">Tap to record</span>
+                </div>
+
+                <!-- Recording state -->
+                <div id="guided-recording" class="guided-center" hidden>
+                  <button type="button" id="guided-stop-btn" class="guided-mic-btn recording" aria-label="Stop recording">
+                    <span class="rec-dot-lg"></span>
+                  </button>
+                  <span id="guided-rec-timer" class="guided-timer">00:00</span>
+                  <span class="guided-hint">Tap to stop</span>
+                </div>
+
+                <!-- Playback state -->
+                <div id="guided-playback" class="guided-playback" hidden>
+                  <audio id="guided-audio-player" controls></audio>
+                  <div class="guided-playback-actions">
+                    <button type="button" id="guided-rerecord-btn" class="btn btn-outline btn-sm">Re-record</button>
+                  </div>
+                </div>
+
+                <!-- Navigation -->
+                <div class="prompt-nav">
+                  <button type="button" id="prompt-prev-btn" class="btn btn-ghost btn-sm" disabled>Previous</button>
+                  <button type="button" id="prompt-skip-btn" class="btn btn-ghost btn-sm">Skip</button>
+                  <button type="button" id="prompt-next-btn" class="btn btn-primary btn-sm">Next</button>
+                </div>
+              </div>
+
+              <!-- Summary (shown after completion) -->
+              <div id="guided-summary" class="guided-summary" hidden>
+                <div class="guided-summary-header">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                    <polyline points="22 4 12 14.01 9 11.01"/>
+                  </svg>
+                  <span id="guided-summary-text">3 of 6 prompts answered</span>
+                </div>
+                <div id="guided-summary-list" class="guided-summary-list"></div>
+                <div class="guided-summary-actions">
+                  <button type="button" id="guided-edit-btn" class="btn btn-outline btn-sm">Edit Responses</button>
+                  <button type="button" id="guided-clear-btn" class="btn btn-ghost btn-sm">Clear All</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- ===== FREE-FORM MODE ===== -->
+            <div id="freeform-mode" class="voice-section" hidden>
               <div id="voice-controls" class="voice-controls">
                 <button type="button" id="record-btn" class="btn btn-outline btn-sm">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

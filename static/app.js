@@ -5,14 +5,36 @@
 (() => {
   'use strict';
 
+  // ---- Guided Prompt Definitions ----
+  const PROMPTS = [
+    { id: 1, question: "How many workers are on site today? What trades are present?", shortLabel: "Crew" },
+    { id: 2, question: "What materials or deliveries arrived today?", shortLabel: "Deliveries" },
+    { id: 3, question: "Were there any delays or issues today?", shortLabel: "Delays" },
+    { id: 4, question: "Any safety concerns or incidents to report?", shortLabel: "Safety" },
+    { id: 5, question: "Any visitors, inspectors, or important decisions made today?", shortLabel: "Visitors" },
+    { id: 6, question: "What's the plan for tomorrow?", shortLabel: "Tomorrow" },
+  ];
+
   // ---- State ----
-  let photoFiles = [];          // File objects to upload
-  let audioBlob = null;         // Recorded or uploaded audio blob
-  let audioFileName = '';        // Display name
+  let photoFiles = [];
+  let voiceMode = 'guided';  // 'guided' or 'freeform'
+
+  // Guided mode state
+  let promptRecordings = [null, null, null, null, null, null]; // Blob per prompt
+  let currentPromptIdx = 0;
+  let guidedCompleted = false; // show summary view
+
+  // Free-form mode state
+  let audioBlob = null;
+  let audioFileName = '';
+
+  // Shared recording state
   let mediaRecorder = null;
   let recordingChunks = [];
   let recordingTimer = null;
   let recordingStart = 0;
+
+  // Progress state
   let elapsedTimer = null;
   let pipelineStart = 0;
 
@@ -27,26 +49,67 @@
   const photoInput    = document.getElementById('photo-input');
   const photoPreviews = document.getElementById('photo-previews');
 
-  const recordBtn     = document.getElementById('record-btn');
+  // Mode switcher
+  const modeTabs      = document.querySelectorAll('.voice-mode-tab');
+  const guidedMode    = document.getElementById('guided-mode');
+  const freeformMode  = document.getElementById('freeform-mode');
+
+  // Guided prompt elements
+  const promptCounter    = document.getElementById('prompt-counter');
+  const promptDots       = document.getElementById('prompt-dots');
+  const promptQuestion   = document.getElementById('prompt-question');
+  const guidedIdle       = document.getElementById('guided-idle');
+  const guidedRecording  = document.getElementById('guided-recording');
+  const guidedPlayback   = document.getElementById('guided-playback');
+  const guidedRecordBtn  = document.getElementById('guided-record-btn');
+  const guidedStopBtn    = document.getElementById('guided-stop-btn');
+  const guidedRecTimer   = document.getElementById('guided-rec-timer');
+  const guidedAudioPlayer = document.getElementById('guided-audio-player');
+  const guidedRerecordBtn = document.getElementById('guided-rerecord-btn');
+  const promptPrevBtn    = document.getElementById('prompt-prev-btn');
+  const promptSkipBtn    = document.getElementById('prompt-skip-btn');
+  const promptNextBtn    = document.getElementById('prompt-next-btn');
+  const guidedSummary    = document.getElementById('guided-summary');
+  const guidedSummaryText = document.getElementById('guided-summary-text');
+  const guidedSummaryList = document.getElementById('guided-summary-list');
+  const guidedEditBtn    = document.getElementById('guided-edit-btn');
+  const guidedClearBtn   = document.getElementById('guided-clear-btn');
+
+  // Free-form elements
+  const recordBtn      = document.getElementById('record-btn');
   const uploadAudioBtn = document.getElementById('upload-audio-btn');
-  const audioInput    = document.getElementById('audio-input');
-  const voiceControls = document.getElementById('voice-controls');
+  const audioInput     = document.getElementById('audio-input');
+  const voiceControls  = document.getElementById('voice-controls');
   const recordingState = document.getElementById('recording-state');
-  const playbackState = document.getElementById('playback-state');
-  const stopBtn       = document.getElementById('stop-btn');
-  const recTimer      = document.getElementById('rec-timer');
-  const audioPlayer   = document.getElementById('audio-player');
-  const audioFilename = document.getElementById('audio-filename');
-  const reRecordBtn   = document.getElementById('re-record-btn');
+  const playbackState  = document.getElementById('playback-state');
+  const stopBtn        = document.getElementById('stop-btn');
+  const recTimer       = document.getElementById('rec-timer');
+  const audioPlayer    = document.getElementById('audio-player');
+  const audioFilename  = document.getElementById('audio-filename');
+  const reRecordBtn    = document.getElementById('re-record-btn');
   const removeAudioBtn = document.getElementById('remove-audio-btn');
 
+  // Progress elements
   const progressSteps = document.getElementById('progress-steps');
   const elapsedTimeEl = document.getElementById('elapsed-time');
   const progressDesc  = document.getElementById('progress-desc');
 
+  // Report elements
   const reportPreview = document.getElementById('report-preview');
   const downloadBtn   = document.getElementById('download-btn');
   const newReportBtn  = document.getElementById('new-report-btn');
+
+  // ---- Mode Switcher ----
+  modeTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      const mode = tab.dataset.mode;
+      if (mode === voiceMode) return;
+      voiceMode = mode;
+      modeTabs.forEach(t => t.classList.toggle('active', t.dataset.mode === mode));
+      guidedMode.hidden = mode !== 'guided';
+      freeformMode.hidden = mode !== 'freeform';
+    });
+  });
 
   // ---- Photo Upload ----
   function updateSubmitBtn() {
@@ -57,7 +120,6 @@
     for (const file of files) {
       if (!file.type.match(/^image\/(jpeg|png)$/)) continue;
       if (photoFiles.length >= 20) break;
-      // Avoid duplicates by name+size
       if (photoFiles.some(f => f.name === file.name && f.size === file.size)) continue;
       photoFiles.push(file);
     }
@@ -93,7 +155,6 @@
     });
   }
 
-  // Drag and drop
   dropZone.addEventListener('click', () => photoInput.click());
   photoInput.addEventListener('change', () => {
     if (photoInput.files.length) addPhotos(photoInput.files);
@@ -110,17 +171,164 @@
     if (e.dataTransfer.files.length) addPhotos(e.dataTransfer.files);
   });
 
-  // ---- Voice Recording ----
-  function showVoiceState(state) {
-    voiceControls.hidden  = state !== 'idle';
-    recordingState.hidden = state !== 'recording';
-    playbackState.hidden  = state !== 'playback';
-  }
-
+  // ---- Guided Prompt Logic ----
   function formatTime(seconds) {
     const m = Math.floor(seconds / 60).toString().padStart(2, '0');
     const s = Math.floor(seconds % 60).toString().padStart(2, '0');
     return `${m}:${s}`;
+  }
+
+  function updateGuidedUI() {
+    if (guidedCompleted) {
+      // Show summary view
+      document.querySelector('.guided-prompt-card').hidden = true;
+      guidedSummary.hidden = false;
+      renderGuidedSummary();
+      return;
+    }
+
+    // Show prompt card
+    document.querySelector('.guided-prompt-card').hidden = false;
+    guidedSummary.hidden = true;
+
+    const prompt = PROMPTS[currentPromptIdx];
+    promptCounter.textContent = `${currentPromptIdx + 1} of ${PROMPTS.length}`;
+    promptQuestion.textContent = prompt.question;
+
+    // Update dots
+    const dots = promptDots.querySelectorAll('.dot');
+    dots.forEach((dot, i) => {
+      dot.classList.toggle('active', i === currentPromptIdx);
+      dot.classList.toggle('filled', promptRecordings[i] !== null);
+    });
+
+    // Navigation
+    promptPrevBtn.disabled = currentPromptIdx === 0;
+    const isLast = currentPromptIdx === PROMPTS.length - 1;
+    promptNextBtn.textContent = isLast ? 'Done' : 'Next';
+
+    // Show correct state for current prompt
+    const hasRecording = promptRecordings[currentPromptIdx] !== null;
+    guidedIdle.hidden = hasRecording;
+    guidedRecording.hidden = true;
+    guidedPlayback.hidden = !hasRecording;
+
+    if (hasRecording) {
+      guidedAudioPlayer.src = URL.createObjectURL(promptRecordings[currentPromptIdx]);
+    }
+  }
+
+  function renderGuidedSummary() {
+    const answered = promptRecordings.filter(r => r !== null).length;
+    guidedSummaryText.textContent = `${answered} of ${PROMPTS.length} prompts answered`;
+
+    guidedSummaryList.innerHTML = '';
+    PROMPTS.forEach((prompt, i) => {
+      const item = document.createElement('div');
+      item.className = 'summary-item' + (promptRecordings[i] ? ' answered' : '');
+      item.innerHTML = `
+        <span class="summary-icon">${promptRecordings[i] ? '&#10003;' : '&#8211;'}</span>
+        <span class="summary-label">${prompt.shortLabel}</span>
+      `;
+      guidedSummaryList.appendChild(item);
+    });
+  }
+
+  // Record for guided prompt
+  guidedRecordBtn.addEventListener('click', async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordingChunks = [];
+      mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) recordingChunks.push(e.data);
+      };
+
+      mediaRecorder.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(recordingChunks, { type: 'audio/webm' });
+        promptRecordings[currentPromptIdx] = blob;
+        clearInterval(recordingTimer);
+        updateGuidedUI();
+      };
+
+      mediaRecorder.start();
+      recordingStart = Date.now();
+      guidedIdle.hidden = true;
+      guidedRecording.hidden = false;
+      guidedPlayback.hidden = true;
+      guidedRecTimer.textContent = '00:00';
+      recordingTimer = setInterval(() => {
+        guidedRecTimer.textContent = formatTime((Date.now() - recordingStart) / 1000);
+      }, 200);
+    } catch (err) {
+      alert('Could not access microphone. Please allow microphone access.');
+    }
+  });
+
+  guidedStopBtn.addEventListener('click', () => {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop();
+    }
+    clearInterval(recordingTimer);
+  });
+
+  guidedRerecordBtn.addEventListener('click', () => {
+    promptRecordings[currentPromptIdx] = null;
+    updateGuidedUI();
+  });
+
+  // Navigation
+  promptPrevBtn.addEventListener('click', () => {
+    if (currentPromptIdx > 0) {
+      currentPromptIdx--;
+      updateGuidedUI();
+    }
+  });
+
+  promptSkipBtn.addEventListener('click', () => {
+    if (currentPromptIdx < PROMPTS.length - 1) {
+      currentPromptIdx++;
+      updateGuidedUI();
+    } else {
+      guidedCompleted = true;
+      updateGuidedUI();
+    }
+  });
+
+  promptNextBtn.addEventListener('click', () => {
+    if (currentPromptIdx < PROMPTS.length - 1) {
+      currentPromptIdx++;
+      updateGuidedUI();
+    } else {
+      // Done — show summary
+      guidedCompleted = true;
+      updateGuidedUI();
+    }
+  });
+
+  guidedEditBtn.addEventListener('click', () => {
+    guidedCompleted = false;
+    currentPromptIdx = 0;
+    updateGuidedUI();
+  });
+
+  guidedClearBtn.addEventListener('click', () => {
+    promptRecordings = [null, null, null, null, null, null];
+    guidedCompleted = false;
+    currentPromptIdx = 0;
+    updateGuidedUI();
+  });
+
+  // Initialize guided UI
+  updateGuidedUI();
+
+  // ---- Free-form Voice Recording ----
+  function showVoiceState(state) {
+    voiceControls.hidden  = state !== 'idle';
+    recordingState.hidden = state !== 'recording';
+    playbackState.hidden  = state !== 'playback';
   }
 
   recordBtn.addEventListener('click', async () => {
@@ -200,8 +408,21 @@
     formData.append('project_name', projectName);
     formData.append('company_name', companyName);
     photoFiles.forEach(f => formData.append('photos', f));
-    if (audioBlob) {
-      formData.append('voice_note', audioBlob, audioFileName);
+
+    // Determine which voice data to send
+    let hasVoice = false;
+    if (voiceMode === 'guided') {
+      promptRecordings.forEach((blob, i) => {
+        if (blob) {
+          formData.append(`voice_prompt_${i + 1}`, blob, `voice_prompt_${i + 1}.webm`);
+          hasVoice = true;
+        }
+      });
+    } else {
+      if (audioBlob) {
+        formData.append('voice_note', audioBlob, audioFileName);
+        hasVoice = true;
+      }
     }
 
     // Show progress section
@@ -209,7 +430,7 @@
     progressSection.hidden = false;
     reportSection.hidden = true;
 
-    buildProgressSteps(audioBlob !== null, photoFiles.length);
+    buildProgressSteps(hasVoice, photoFiles.length);
     startElapsedTimer();
 
     try {
@@ -227,7 +448,7 @@
 
   function buildProgressSteps(hasVoice, photoCount) {
     STEPS.length = 0;
-    if (hasVoice) STEPS.push({ id: 'transcribing', label: 'Transcribe voice note' });
+    if (hasVoice) STEPS.push({ id: 'transcribing', label: 'Transcribe voice notes' });
     STEPS.push({ id: 'analyzing', label: `Analyze photos (0/${photoCount})`, photoCount });
     STEPS.push({ id: 'synthesizing', label: 'Synthesize report narrative' });
     STEPS.push({ id: 'generating_pdf', label: 'Generate PDF' });
@@ -257,7 +478,7 @@
       icon.innerHTML = '<div class="spinner"></div>';
     } else if (state === 'done') {
       el.classList.add('done');
-      icon.innerHTML = '<span class="check-icon">✓</span>';
+      icon.innerHTML = '<span class="check-icon">&#10003;</span>';
     } else {
       icon.innerHTML = '<span class="step-num"></span>';
     }
@@ -292,10 +513,13 @@
 
       if (stage === 'transcribing') {
         activateStep('transcribing');
+        const stepEl = document.getElementById('step-transcribing');
+        if (stepEl && data.message) {
+          stepEl.querySelector('.step-label').textContent = data.message;
+        }
       } else if (stage === 'transcribing_done') {
-        setStepState('transcribing', 'done');
+        setStepState('transcribing', 'done', data.message);
       } else if (stage === 'analyzing') {
-        // First analyzing event marks transcription as done (if exists)
         if (data.photo === 1) {
           setStepState('transcribing', 'done');
         }
@@ -461,13 +685,19 @@
 
   // ---- New Report ----
   newReportBtn.addEventListener('click', () => {
-    // Reset state
+    // Reset all state
     photoFiles = [];
     audioBlob = null;
     audioFileName = '';
+    promptRecordings = [null, null, null, null, null, null];
+    currentPromptIdx = 0;
+    guidedCompleted = false;
+
     renderPhotoPreviews();
     updateSubmitBtn();
     showVoiceState('idle');
+    updateGuidedUI();
+
     reportSection.hidden = true;
     progressSection.hidden = true;
     uploadSection.hidden = false;

@@ -47,15 +47,65 @@ TEMPLATE_CONFIG = json.loads(_TEMPLATE_PATH.read_text())
 
 
 def _run_pipeline(job_id: str, photos_dir: str, photo_files: list[str],
-                  voice_path: str | None, project_name: str, company_name: str):
+                  voice_path: str | None, guided_voice_paths: dict[int, str] | None,
+                  project_name: str, company_name: str):
     """Run the full pipeline in a background thread, posting progress events."""
     q: Queue = jobs[job_id]["queue"]
     today = date.today().strftime("%Y-%m-%d")
 
     try:
-        # Step 1: Transcribe voice note (if provided)
+        # Step 1: Transcribe voice notes
         voice_notes = None
-        if voice_path:
+
+        if guided_voice_paths:
+            # Guided prompts mode: transcribe each clip individually
+            total_clips = len(guided_voice_paths)
+            transcribed = 0
+            q.put({"stage": "transcribing", "message": f"Transcribing voice notes (0/{total_clips})..."})
+
+            prompt_transcripts: dict[int, str] = {}
+            for prompt_num in sorted(guided_voice_paths.keys()):
+                vpath = guided_voice_paths[prompt_num]
+                transcribed += 1
+                q.put({"stage": "transcribing", "message": f"Transcribing voice notes ({transcribed}/{total_clips})..."})
+                try:
+                    transcript = transcribe_audio(vpath)
+                    prompt_transcripts[prompt_num] = transcript
+                except Exception as exc:
+                    logger.warning("Transcription failed for prompt %d: %s", prompt_num, exc)
+                # Rate limit pause between Groq Whisper calls
+                if transcribed < total_clips and config.PROVIDER == "groq":
+                    time.sleep(2)
+
+            # Build structured VoiceNoteData from transcripts
+            context_parts = []
+            voice_data = {}
+
+            if 1 in prompt_transcripts:
+                context_parts.append(f"Crew: {prompt_transcripts[1]}")
+            if 2 in prompt_transcripts:
+                voice_data["deliveries"] = [prompt_transcripts[2]]
+                context_parts.append(f"Deliveries: {prompt_transcripts[2]}")
+            if 3 in prompt_transcripts:
+                voice_data["delays"] = [prompt_transcripts[3]]
+                context_parts.append(f"Delays: {prompt_transcripts[3]}")
+            if 4 in prompt_transcripts:
+                voice_data["safety_notes"] = prompt_transcripts[4]
+                context_parts.append(f"Safety: {prompt_transcripts[4]}")
+            if 5 in prompt_transcripts:
+                voice_data["visitor_notes"] = prompt_transcripts[5]
+                voice_data["decisions_made"] = [prompt_transcripts[5]]
+                context_parts.append(f"Visitors/Decisions: {prompt_transcripts[5]}")
+            if 6 in prompt_transcripts:
+                voice_data["next_day_plan"] = prompt_transcripts[6]
+                context_parts.append(f"Tomorrow's Plan: {prompt_transcripts[6]}")
+
+            voice_data["additional_context"] = "\n".join(context_parts)
+            voice_notes = VoiceNoteData(**voice_data)
+            q.put({"stage": "transcribing_done", "message": f"Transcribed {total_clips} voice note(s)."})
+
+        elif voice_path:
+            # Free-form mode: single voice note (original behavior)
             q.put({"stage": "transcribing", "message": "Transcribing voice note..."})
             try:
                 transcript = transcribe_audio(voice_path)
@@ -127,6 +177,12 @@ async def generate_report(
     company_name: str = Form("Construction Co."),
     photos: list[UploadFile] = File(...),
     voice_note: UploadFile | None = File(None),
+    voice_prompt_1: UploadFile | None = File(None),
+    voice_prompt_2: UploadFile | None = File(None),
+    voice_prompt_3: UploadFile | None = File(None),
+    voice_prompt_4: UploadFile | None = File(None),
+    voice_prompt_5: UploadFile | None = File(None),
+    voice_prompt_6: UploadFile | None = File(None),
 ):
     """Start report generation. Returns a job_id for progress tracking."""
     job_id = str(uuid.uuid4())
@@ -144,9 +200,23 @@ async def generate_report(
                 f.write(content)
             photo_paths.append(dest)
 
-    # Save voice note if provided
+    # Save guided voice prompt clips (if any)
+    guided_voice_paths: dict[int, str] = {}
+    for idx, clip in enumerate(
+        [voice_prompt_1, voice_prompt_2, voice_prompt_3,
+         voice_prompt_4, voice_prompt_5, voice_prompt_6],
+        start=1,
+    ):
+        if clip and clip.filename:
+            clip_dest = os.path.join(tmp_dir, f"voice_prompt_{idx}.webm")
+            with open(clip_dest, "wb") as f:
+                content = await clip.read()
+                f.write(content)
+            guided_voice_paths[idx] = clip_dest
+
+    # Save free-form voice note if provided (and no guided clips)
     voice_path = None
-    if voice_note and voice_note.filename:
+    if not guided_voice_paths and voice_note and voice_note.filename:
         voice_dest = os.path.join(tmp_dir, voice_note.filename)
         with open(voice_dest, "wb") as f:
             content = await voice_note.read()
@@ -164,7 +234,8 @@ async def generate_report(
     # Start pipeline in background thread
     thread = threading.Thread(
         target=_run_pipeline,
-        args=(job_id, tmp_dir, photo_paths, voice_path, project_name, company_name),
+        args=(job_id, tmp_dir, photo_paths, voice_path,
+              guided_voice_paths or None, project_name, company_name),
         daemon=True,
     )
     thread.start()

@@ -16,9 +16,12 @@ class PhotoAnalysis(BaseModel):
 class VoiceNoteData(BaseModel):
     crew_count: Optional[int] = Field(None, description="Number of workers on site")
     trades_present: list[str] = Field(default_factory=list, description="Trades working today")
+    deliveries: list[str] = Field(default_factory=list, description="Materials/deliveries received")
     delays: list[str] = Field(default_factory=list, description="Any delays encountered")
+    safety_notes: str = Field(default="", description="Safety concerns from voice")
     decisions_made: list[str] = Field(default_factory=list, description="Decisions made on site")
     visitor_notes: str = Field(default="", description="Notes about inspectors/clients/visitors")
+    next_day_plan: str = Field(default="", description="Tomorrow's plan from voice")
     additional_context: str = Field(default="", description="Any other relevant information")
 
 
