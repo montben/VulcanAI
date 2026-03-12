@@ -16,7 +16,7 @@ The easiest way to use SiteScribe is through the browser-based interface.
 
 2. **Install dependencies:**
    ```bash
-   pip install -r requirements.txt
+   pip3 install -r requirements.txt
    ```
 
 3. **Configure your API key:**
@@ -31,7 +31,7 @@ The easiest way to use SiteScribe is through the browser-based interface.
 
 4. **Start the web server:**
    ```bash
-   python web_app.py
+   python3 web_app.py
    ```
 
 5. **Open your browser** to [http://localhost:8000](http://localhost:8000).
@@ -43,7 +43,7 @@ The easiest way to use SiteScribe is through the browser-based interface.
 You can also run SiteScribe from the command line:
 
 ```bash
-python main.py --photos ./sample_input --notes ./notes.txt \
+python3 main.py --photos ./sample_input --notes ./notes.txt \
     --company "ABC Construction" --project "Smith Residence Remodel"
 ```
 
