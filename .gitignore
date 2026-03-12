@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.env
+output/*.pdf
+*.resized.jpg
+.DS_Store
