@@ -130,6 +130,12 @@ def main():
         else:
             voice_notes = _parse_voice_notes(args.notes)
 
+    # Brief pause before synthesis to avoid rate-limit issues on free-tier APIs
+    if config.PROVIDER == "groq":
+        print("Waiting for API cooldown...", end=" ", flush=True)
+        time.sleep(5)
+        print("ok")
+
     # Stage 3+4: Synthesize report
     print("Synthesizing report narrative...", end=" ", flush=True)
     synth_start = time.time()

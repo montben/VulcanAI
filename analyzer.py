@@ -1,4 +1,4 @@
-"""Photo analysis module — sends jobsite photos to GPT-4o Vision for structured analysis."""
+"""Photo analysis module — sends jobsite photos to a vision LLM for structured analysis."""
 
 import base64
 import json
@@ -7,7 +7,6 @@ import os
 import time
 from pathlib import Path
 
-from openai import OpenAI
 from PIL import Image
 
 import config
@@ -54,9 +53,7 @@ def _parse_json_response(text: str) -> dict:
     """
     stripped = text.strip()
     if stripped.startswith("```"):
-        # Remove opening fence (with optional language tag) and closing fence
         lines = stripped.split("\n")
-        # Drop first and last lines (fences)
         lines = lines[1:]
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
@@ -64,25 +61,71 @@ def _parse_json_response(text: str) -> dict:
     return json.loads(stripped)
 
 
-def analyze_photo(image_path: str) -> PhotoAnalysis:
-    """Analyze a single construction site photo using GPT-4o Vision.
+# ---------------------------------------------------------------------------
+# Google Gemini provider
+# ---------------------------------------------------------------------------
+def _analyze_photo_google(image_path: str, filename: str) -> PhotoAnalysis:
+    """Analyze a photo using Google Gemini Vision."""
+    from google import genai
 
-    Encodes the image to base64, sends it with the construction-specific prompt,
-    and returns a validated PhotoAnalysis model.  Retries once on JSON parse failure.
-    """
-    client = OpenAI(api_key=config.OPENAI_API_KEY)
-    filename = os.path.basename(image_path)
+    client = genai.Client(api_key=config.GOOGLE_API_KEY)
 
     # Resize if needed
     processed_path = _resize_image(image_path)
     try:
         b64_image = _encode_image_base64(processed_path)
     finally:
-        # Clean up temporary resized file
         if processed_path != image_path and os.path.exists(processed_path):
             os.remove(processed_path)
 
-    # Determine MIME type
+    ext = Path(image_path).suffix.lower()
+    mime = "image/png" if ext == ".png" else "image/jpeg"
+
+    prompt = SYSTEM_PROMPT + "\n\nAnalyze this construction site photo. Return ONLY valid JSON."
+
+    last_error = None
+    for attempt in range(2):
+        response = client.models.generate_content(
+            model=config.VISION_MODEL,
+            contents=[
+                {
+                    "parts": [
+                        {"inline_data": {"mime_type": mime, "data": b64_image}},
+                        {"text": prompt},
+                    ]
+                }
+            ],
+        )
+        raw_text = response.text
+        try:
+            data = _parse_json_response(raw_text)
+            data["photo_filename"] = filename
+            return PhotoAnalysis(**data)
+        except (json.JSONDecodeError, Exception) as exc:
+            last_error = exc
+            if attempt == 0:
+                logger.warning("Bad JSON from Gemini for %s, retrying... (%s)", filename, exc)
+            continue
+
+    raise ValueError(f"Failed to parse analysis for {filename} after 2 attempts: {last_error}")
+
+
+# ---------------------------------------------------------------------------
+# OpenAI provider
+# ---------------------------------------------------------------------------
+def _analyze_photo_openai(image_path: str, filename: str) -> PhotoAnalysis:
+    """Analyze a photo using OpenAI GPT-4o Vision."""
+    from openai import OpenAI
+
+    client = OpenAI(api_key=config.OPENAI_API_KEY)
+
+    processed_path = _resize_image(image_path)
+    try:
+        b64_image = _encode_image_base64(processed_path)
+    finally:
+        if processed_path != image_path and os.path.exists(processed_path):
+            os.remove(processed_path)
+
     ext = Path(image_path).suffix.lower()
     mime = "image/png" if ext == ".png" else "image/jpeg"
 
@@ -107,7 +150,7 @@ def analyze_photo(image_path: str) -> PhotoAnalysis:
     ]
 
     last_error = None
-    for attempt in range(2):  # retry once on bad JSON
+    for attempt in range(2):
         response = client.chat.completions.create(
             model=config.VISION_MODEL,
             messages=messages,
@@ -126,6 +169,80 @@ def analyze_photo(image_path: str) -> PhotoAnalysis:
             continue
 
     raise ValueError(f"Failed to parse analysis for {filename} after 2 attempts: {last_error}")
+
+
+# ---------------------------------------------------------------------------
+# Groq provider (OpenAI-compatible API)
+# ---------------------------------------------------------------------------
+def _analyze_photo_groq(image_path: str, filename: str) -> PhotoAnalysis:
+    """Analyze a photo using Groq (Llama 4 Scout with vision)."""
+    from groq import Groq
+
+    client = Groq(api_key=config.GROQ_API_KEY)
+
+    processed_path = _resize_image(image_path)
+    try:
+        b64_image = _encode_image_base64(processed_path)
+    finally:
+        if processed_path != image_path and os.path.exists(processed_path):
+            os.remove(processed_path)
+
+    ext = Path(image_path).suffix.lower()
+    mime = "image/png" if ext == ".png" else "image/jpeg"
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{mime};base64,{b64_image}",
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": "Analyze this construction site photo. Return ONLY valid JSON.",
+                },
+            ],
+        },
+    ]
+
+    last_error = None
+    for attempt in range(2):
+        response = client.chat.completions.create(
+            model=config.VISION_MODEL,
+            messages=messages,
+            max_tokens=1024,
+            temperature=0.2,
+        )
+        raw_text = response.choices[0].message.content
+        try:
+            data = _parse_json_response(raw_text)
+            data["photo_filename"] = filename
+            return PhotoAnalysis(**data)
+        except (json.JSONDecodeError, Exception) as exc:
+            last_error = exc
+            if attempt == 0:
+                logger.warning("Bad JSON from Groq for %s, retrying... (%s)", filename, exc)
+            continue
+
+    raise ValueError(f"Failed to parse analysis for {filename} after 2 attempts: {last_error}")
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+def analyze_photo(image_path: str) -> PhotoAnalysis:
+    """Analyze a single construction site photo using the configured vision provider."""
+    filename = os.path.basename(image_path)
+    if config.PROVIDER == "groq":
+        return _analyze_photo_groq(image_path, filename)
+    elif config.PROVIDER == "google":
+        return _analyze_photo_google(image_path, filename)
+    else:
+        return _analyze_photo_openai(image_path, filename)
 
 
 def analyze_all_photos(folder_path: str) -> list[PhotoAnalysis]:
