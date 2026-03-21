@@ -1,10 +1,7 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
-// In dev, the backend runs on :8000. In production (served by FastAPI), same-origin.
-const API_BASE = import.meta.env.VITE_API_BASE || "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
-
-// For local dev against the Python backend, set VITE_API_BASE=http://localhost:8000
-const BACKEND_URL = import.meta.env.VITE_API_BASE || API_BASE;
+// In dev, the backend runs on :8000. Set VITE_API_BASE to override.
+const BACKEND_URL = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {

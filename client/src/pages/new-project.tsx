@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { VulcanLogo } from "@/components/VulcanLogo";
 import { useTheme } from "@/components/ThemeProvider";
 import { PerplexityAttribution } from "@/components/PerplexityAttribution";
@@ -92,21 +92,36 @@ function WorkerTag({
 }
 
 /* ─── Photo upload ─── */
-function PhotoUpload() {
+function PhotoUpload({ onUploaded }: { onUploaded: (url: string) => void }) {
   const [preview, setPreview] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (ev) => setPreview(ev.target?.result as string);
+    reader.readAsDataURL(file);
+
+    const fd = new FormData();
+    fd.append("file", file);
+    fetch("http://localhost:8000/api/uploads/image", { method: "POST", body: fd })
+      .then((r) => r.json())
+      .then((data) => onUploaded(data.url));
+  };
 
   return (
     <div
       className="flex flex-col items-center gap-3"
       data-testid="photo-upload-section"
     >
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
+      />
       <button
-        onClick={() => {
-          // Mock: set a placeholder preview
-          setPreview(
-            "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='%23ddd'/%3E%3C/svg%3E"
-          );
-        }}
+        onClick={() => inputRef.current?.click()}
         className={`group relative flex h-40 w-40 items-center justify-center overflow-hidden rounded-md border-2 border-dashed transition-all duration-200 ${
           preview
             ? "border-primary/30 bg-card"
@@ -115,9 +130,7 @@ function PhotoUpload() {
         data-testid="button-upload-photo"
       >
         {preview ? (
-          <div className="flex h-full w-full items-center justify-center bg-muted">
-            <Building2 className="h-12 w-12 text-muted-foreground/40" />
-          </div>
+          <img src={preview} className="h-full w-full object-cover" alt="Cover photo" />
         ) : (
           <div className="flex flex-col items-center gap-2 text-muted-foreground group-hover:text-primary transition-colors">
             <Camera className="h-6 w-6" />
@@ -184,6 +197,7 @@ export default function NewProject() {
   const [siteManager, setSiteManager] = useState("");
   const [workerInput, setWorkerInput] = useState("");
   const [workers, setWorkers] = useState<string[]>([]);
+  const [coverPhotoUrl, setCoverPhotoUrl] = useState<string | null>(null);
 
   const createProjectMutation = useMutation({
     mutationFn: async () => {
@@ -195,6 +209,7 @@ export default function NewProject() {
         project_type: projectType || null,
         start_date: startDate || null,
         expected_end_date: computeEndDate(startDate, timeline),
+        profile_image_url: coverPhotoUrl || null,
       });
       const project = await res.json();
 
@@ -287,7 +302,7 @@ export default function NewProject() {
             <h2 className="text-sm font-semibold">Project Details</h2>
 
             {/* Photo upload centered */}
-            <PhotoUpload />
+            <PhotoUpload onUploaded={(url) => setCoverPhotoUrl(url)} />
 
             {/* Project name */}
             <FormField label="Project Name" icon={Briefcase} testId="field-project-name">

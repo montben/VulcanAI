@@ -17,7 +17,7 @@ import {
   CheckCircle2,
   Calendar,
 } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useParams } from "wouter";
 
 /* ─── Generate dates from project start ─── */
 function generateDates(startStr: string, count: number) {
@@ -260,7 +260,7 @@ function ReportCard({ report }: { report: DayReport }) {
 }
 
 /* ─── Empty state (no report for selected date) ─── */
-function EmptyDay({ date, isFuture }: { date: Date; isFuture: boolean }) {
+function EmptyDay({ date, isFuture, projectId }: { date: Date; isFuture: boolean; projectId: string }) {
   return (
     <div className="flex flex-col items-center gap-4 rounded-md border bg-card py-12 px-6 text-center" data-testid="empty-day">
       <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
@@ -281,7 +281,7 @@ function EmptyDay({ date, isFuture }: { date: Date; isFuture: boolean }) {
         </p>
       </div>
       {!isFuture && (
-        <Link href="/project/p1/report/new">
+        <Link href={`/project/${projectId}/report/new`}>
           <Button className="gap-1.5" data-testid="button-create-report">
             <Plus className="h-4 w-4" />
             Create Report
@@ -294,6 +294,7 @@ function EmptyDay({ date, isFuture }: { date: Date; isFuture: boolean }) {
 
 /* ─── Project Page ─── */
 export default function Project() {
+  const { id: projectId = "" } = useParams<{ id: string }>();
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
@@ -461,7 +462,7 @@ export default function Project() {
         {report ? (
           <ReportCard report={report} />
         ) : (
-          <EmptyDay date={selectedDate} isFuture={isFuture} />
+          <EmptyDay date={selectedDate} isFuture={isFuture} projectId={projectId} />
         )}
       </main>
 

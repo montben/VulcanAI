@@ -280,7 +280,7 @@ function PhotosStep({
       </div>
 
       <div className="mt-8 flex items-center justify-between border-t pt-6">
-        <Link href="/project/p1">
+        <Link href={`/project/${projectId}`}>
           <Button variant="ghost" className="text-muted-foreground" disabled={isUploading} data-testid="button-cancel">
             Cancel
           </Button>
@@ -592,7 +592,7 @@ function DoneStep() {
           <Download className="h-4 w-4" />
           Download PDF
         </Button>
-        <Link href="/project/p1">
+        <Link href={`/project/${projectId}`}>
           <Button variant="secondary" className="w-full gap-2 sm:w-auto" data-testid="button-back-to-project">
             <ArrowLeft className="h-4 w-4" />
             Back to Project
@@ -606,7 +606,7 @@ function DoneStep() {
 /* ─── Create Report Page ─── */
 export default function CreateReport() {
   const params = useParams<{ id: string }>();
-  const projectId = params.id || "p1";
+  const projectId = params.id ?? "";
 
   const [step, setStep] = useState<Step>("photos");
   const [photos, setPhotos] = useState<PhotoEntry[]>([]);
