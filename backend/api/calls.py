@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import logging
 import os
 import threading
@@ -21,7 +20,7 @@ from backend.utils.status import transition_status
 
 logger = logging.getLogger(__name__)
 _CALL_TTS_MODEL = os.getenv("DEEPGRAM_TTS_MODEL", "aura-2-thalia-en")
-_CALL_UTTERANCE_END_MS = os.getenv("DEEPGRAM_UTTERANCE_END_MS", "3200")
+_CALL_UTTERANCE_END_MS = os.getenv("DEEPGRAM_UTTERANCE_END_MS", "1800")
 
 _CALL_FALLBACK_PROMPTS = [
     "Tell me what got done on site today.",
@@ -80,39 +79,40 @@ def _get_report_for_project(db: Session, project_id: str, report_id: str) -> Dai
     return report
 
 
-def _parse_json_response(text: str) -> dict:
-    stripped = text.strip()
-    if "```" in stripped:
-        fence_start = stripped.index("```")
-        after_fence = stripped[fence_start + 3:]
-        if "\n" in after_fence:
-            after_fence = after_fence.split("\n", 1)[1]
-        if "```" in after_fence:
-            after_fence = after_fence[:after_fence.rindex("```")]
-        stripped = after_fence.strip()
-    if not stripped.startswith("{"):
-        brace = stripped.find("{")
-        if brace != -1:
-            stripped = stripped[brace:]
-    return json.loads(stripped)
+_interviewer_client = None
+
+
+def _get_interviewer_client():
+    global _interviewer_client
+    if _interviewer_client is None:
+        from groq import Groq
+        from backend.pipeline import config
+        _interviewer_client = Groq(api_key=config.GROQ_API_KEY)
+    return _interviewer_client
+
+
+_MAX_USER_TURNS = 8
 
 
 def _generate_next_question(conversation: list[dict[str, str]]) -> dict[str, object]:
     if not conversation:
         return {"done": False, "question": _CALL_FALLBACK_PROMPTS[0]}
 
+    user_turns = sum(1 for turn in conversation if turn["speaker"] == "user")
+    if user_turns >= _MAX_USER_TURNS:
+        return {"done": True, "question": "That covers everything I need. Thanks!"}
+
     from backend.pipeline import config
 
     if config.PROVIDER != "groq" or not config.GROQ_API_KEY:
-        user_turns = sum(1 for turn in conversation if turn["speaker"] == "user")
         if user_turns < len(_CALL_FALLBACK_PROMPTS):
             return {"done": False, "question": _CALL_FALLBACK_PROMPTS[user_turns]}
         return {"done": True, "question": "I have what I need for the report."}
 
     try:
-        from groq import Groq
+        from backend.pipeline.json_utils import parse_json_response
 
-        client = Groq(api_key=config.GROQ_API_KEY)
+        client = _get_interviewer_client()
         formatted_conversation = "\n".join(
             f"{turn['speaker'].capitalize()}: {turn['text']}" for turn in conversation
         )
@@ -124,9 +124,10 @@ def _generate_next_question(conversation: list[dict[str, str]]) -> dict[str, obj
             ],
             max_tokens=200,
             temperature=0.2,
+            response_format={"type": "json_object"},
         )
         raw_text = response.choices[0].message.content or ""
-        parsed = _parse_json_response(raw_text)
+        parsed = parse_json_response(raw_text)
         question = str(parsed.get("question", "")).strip()
         done = bool(parsed.get("done", False))
         if not question:
@@ -134,7 +135,6 @@ def _generate_next_question(conversation: list[dict[str, str]]) -> dict[str, obj
         return {"done": done, "question": question}
     except Exception as exc:
         logger.warning("Falling back to scripted interviewer prompt: %s", exc)
-        user_turns = sum(1 for turn in conversation if turn["speaker"] == "user")
         if user_turns < len(_CALL_FALLBACK_PROMPTS):
             return {"done": False, "question": _CALL_FALLBACK_PROMPTS[user_turns]}
         return {"done": True, "question": "I have what I need for the report."}

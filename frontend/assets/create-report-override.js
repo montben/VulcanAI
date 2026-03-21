@@ -403,7 +403,10 @@ function renderDoneStep() {
       </div>
 
       <div class="flex flex-col items-center gap-3 sm:flex-row">
-        <button type="button" class="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" data-download-json>
+        <button type="button" class="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-download-pdf ${state.finalizingPdf ? "disabled" : ""}>
+          ${state.finalizingPdf ? "Generating PDF..." : "Download PDF"}
+        </button>
+        <button type="button" class="inline-flex items-center rounded-md border px-4 py-2 text-sm" data-download-json>
           Download JSON
         </button>
         <button type="button" class="inline-flex items-center rounded-md border px-4 py-2 text-sm" data-back-project>
@@ -535,6 +538,7 @@ function bindEvents(root) {
   root.querySelector("[data-end-call]")?.addEventListener("click", endCallAndGenerate);
   root.querySelector("[data-generate-without-call]")?.addEventListener("click", generateFromStoredInputs);
   root.querySelector("[data-download-json]")?.addEventListener("click", downloadGeneratedJson);
+  root.querySelector("[data-download-pdf]")?.addEventListener("click", downloadPdf);
 }
 
 async function loadProject(projectId) {
@@ -1051,6 +1055,42 @@ function downloadGeneratedJson() {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+async function downloadPdf() {
+  if (!state?.projectId || !state?.reportId || state.finalizingPdf) return;
+
+  try {
+    state.finalizingPdf = true;
+    clearError();
+    render();
+
+    // Call finalize endpoint — this generates the PDF via Node.js pipeline
+    const result = await requestJson(
+      `/api/projects/${state.projectId}/reports/${state.reportId}/finalize`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }
+    );
+
+    // Download the PDF
+    const pdfUrl = result.pdf_url;
+    if (pdfUrl) {
+      const anchor = document.createElement("a");
+      anchor.href = pdfUrl;
+      anchor.download = "";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+    } else {
+      showError("PDF URL not returned from server.");
+    }
+  } catch (error) {
+    showError(error.message || "Failed to generate PDF.");
+  } finally {
+    if (state) {
+      state.finalizingPdf = false;
+      render();
+    }
+  }
+}
+
 async function resolveProjectId(projectId) {
   if (isUuid(projectId)) return projectId;
   const remembered = sessionStorage.getItem(STORAGE_KEY);
@@ -1091,6 +1131,7 @@ async function mountForRoute(projectId) {
     audioFallbackTimeouts: {},
     playedAssistantAudioTexts: new Set(),
     audioPrimed: false,
+    finalizingPdf: false,
     info: "",
     error: "",
   };

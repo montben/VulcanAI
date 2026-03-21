@@ -166,15 +166,17 @@ def run_report_pipeline(
                 "photo": 0,
                 "total": len(photos),
             })
-            photo_descriptions = analyze_photos_batch(photos, db)
-            db.commit()
 
-            for i, _desc in enumerate(photo_descriptions, start=1):
+            def _photo_progress(completed: int, total: int) -> None:
                 _emit(progress_queue, {
                     "stage": "analyzing_photos",
-                    "photo": i,
-                    "total": len(photos),
+                    "message": f"Analyzed photo {completed}/{total}",
+                    "photo": completed,
+                    "total": total,
                 })
+
+            photo_descriptions = analyze_photos_batch(photos, db, on_progress=_photo_progress)
+            db.commit()
         else:
             _emit(progress_queue, {"stage": "analyzing_photos", "message": "No photos attached — skipping"})
 
