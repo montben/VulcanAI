@@ -23,6 +23,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.responses import StreamingResponse
 
+from backend.api.members import router as members_router
+from backend.api.projects import router as projects_router
+from backend.api.reports import router as reports_router
 from backend.pipeline import config
 from backend.pipeline.analyzer import analyze_photo
 from backend.pipeline.models import VoiceNoteData
@@ -217,6 +220,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(projects_router)
+app.include_router(members_router)
+app.include_router(reports_router)
+
 
 @app.get("/")
 async def root() -> dict[str, object]:
@@ -246,6 +253,14 @@ async def endpoints_manifest() -> dict[str, object]:
         "frontend_config": {
             "apiBaseUrl": "http://localhost:8000",
             "endpoints": {
+                # Project / report management (Vulcan)
+                "projects": "/api/projects",
+                "members": "/api/members",
+                "projectReports": "/api/projects/{project_id}/reports",
+                "reportPhotos": "/api/projects/{project_id}/reports/{report_id}/photos",
+                "reportTranscripts": "/api/projects/{project_id}/reports/{report_id}/transcripts",
+                "reportGenerated": "/api/projects/{project_id}/reports/{report_id}/generated",
+                # Legacy pipeline (still active)
                 "generateReport": "/api/generate",
                 "reportProgress": "/api/progress",
                 "reportDownload": "/api/download",
