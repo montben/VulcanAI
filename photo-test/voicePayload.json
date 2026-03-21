@@ -1,0 +1,53 @@
+{
+  "report": {
+    "metadata": {
+      "project_name": "Oakwood Residential Build — Lot 14",
+      "report_date": "2026-03-21",
+      "location": "123 Oakwood Drive, Austin TX 78701",
+      "weather": "Sunny, 72°F, light wind",
+      "prepared_by": "J. Rivera"
+    },
+    "summary": "Framing on the south and west walls is complete. Rough-in plumbing is underway beneath the slab. One tripping hazard identified near the main stairwell.",
+    "work_completed": [
+      { "area": "South wall", "task": "framing", "status": "completed" },
+      { "area": "West wall",  "task": "framing", "status": "completed" },
+      { "area": "",           "task": "Window and door rough openings cut", "status": "completed" },
+      { "area": "",           "task": "Temporary bracing installed", "status": "completed" }
+    ],
+    "progress_update": "Project is on schedule. Roof sheathing is expected to begin Monday.",
+    "issues_delays": [
+      {
+        "issue": "Lumber delivery for second floor delayed",
+        "impact": "Second-floor framing pushed back 2 days",
+        "severity": "medium"
+      }
+    ],
+    "safety_notes": [
+      {
+        "observation": "Debris pile near stairwell entry — tripping hazard",
+        "action_required": "Clear debris before end of day"
+      },
+      {
+        "observation": "Hard hat and hi-vis vest required in all active zones",
+        "action_required": "Enforce PPE compliance at site entry"
+      }
+    ],
+    "next_steps": [
+      { "task": "Clear debris from stairwell area",              "priority": "high"   },
+      { "task": "Complete rough-in plumbing under slab",         "priority": "high"   },
+      { "task": "Begin second-floor framing once lumber arrives", "priority": "medium" }
+    ],
+    "resources_mentioned": {
+      "crew_summary": "6-person framing crew, 2 plumbers on site",
+      "equipment": ["Nail gun", "Scaffolding", "Concrete saw"],
+      "materials": ["2x6 lumber", "OSB sheathing", "PVC pipe", "Concrete mix"]
+    },
+    "additional_notes": "Owner walked the site at 2pm and approved framing layout."
+  },
+  "photo_assets": [],
+  "pdf_context": {
+    "project_id": "proj-001",
+    "report_id":  "rpt-2026-03-21",
+    "template_version": "v2"
+  }
+}

@@ -1,0 +1,26 @@
+[
+  {
+    "filename":          "framing_exterior.jpg",
+    "original_filename": "framing_exterior.jpg",
+    "file_path":         "photo-test/photos/framing_exterior.jpg",
+    "caption":           "Exterior framing complete on south wall"
+  },
+  {
+    "filename":          "plumbing_roughin.jpg",
+    "original_filename": "plumbing_roughin.jpg",
+    "file_path":         "photo-test/photos/plumbing_roughin.jpg",
+    "caption":           "Rough-in plumbing under the slab"
+  },
+  {
+    "filename":          "messy-walkway.jpg",
+    "original_filename": "messy-walkway.jpg",
+    "file_path":         "photo-test/photos/messy-walkway.jpg",
+    "caption":           "Debris and scrap lumber near stairwell base"
+  },
+  {
+    "filename":          "construction-defect-wall.jpg",
+    "original_filename": "construction-defect-wall.jpg",
+    "file_path":         "photo-test/photos/construction-defect-wall.jpg",
+    "caption":           "Wall section showing visible damage above the door in the guest bedroom"
+  }
+]
