@@ -8,3 +8,4 @@ output/*.pdf
 .venv/
 node_modules/
 uploads/
+.claude/

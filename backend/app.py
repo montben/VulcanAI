@@ -24,6 +24,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import StreamingResponse
 
+from backend.api.calls import router as calls_router
+from backend.api.edits import router as edits_router
 from backend.api.members import router as members_router
 from backend.api.projects import router as projects_router
 from backend.api.reports import router as reports_router
@@ -228,6 +230,8 @@ UPLOADS_DIR.mkdir(exist_ok=True)
 app.include_router(projects_router)
 app.include_router(members_router)
 app.include_router(reports_router)
+app.include_router(calls_router)
+app.include_router(edits_router)
 
 
 @app.post("/api/uploads/image")
@@ -283,9 +287,19 @@ async def endpoints_manifest() -> dict[str, object]:
                 "reportPhotos": "/api/projects/{project_id}/reports/{report_id}/photos",
                 "reportTranscripts": "/api/projects/{project_id}/reports/{report_id}/transcripts",
                 "reportGenerated": "/api/projects/{project_id}/reports/{report_id}/generated",
+                # V2 endpoints (new report flow)
+                "startCall": "/api/projects/{project_id}/reports/{report_id}/calls",
+                "callStream": "/api/projects/{project_id}/reports/{report_id}/calls/{call_id}/stream",
+                "endCall": "/api/projects/{project_id}/reports/{report_id}/calls/{call_id}/end",
+                "generate": "/api/projects/{project_id}/reports/{report_id}/generate",
+                "draftReport": "/api/projects/{project_id}/reports/{report_id}/draft-report",
+                "suggestEdits": "/api/projects/{project_id}/reports/{report_id}/suggest-edits",
+                "finalize": "/api/projects/{project_id}/reports/{report_id}/finalize",
+                "reportPdf": "/api/projects/{project_id}/reports/{report_id}/pdf",
+                "reportProgress": "/api/projects/{project_id}/reports/{report_id}/progress",
                 # Legacy pipeline (still active)
                 "generateReport": "/api/generate",
-                "reportProgress": "/api/progress",
+                "legacyReportProgress": "/api/progress",
                 "reportDownload": "/api/download",
                 "health": "/api/health",
                 "endpointManifest": "/api/endpoints",

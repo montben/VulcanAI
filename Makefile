@@ -1,7 +1,7 @@
 # Vulcan — Development Commands
 # Usage: make <target>
 
-.PHONY: up down db-reset backend frontend setup logs db-shell help
+.PHONY: up down db-reset db-migrate backend frontend setup logs db-shell help
 
 VENV := backend/.venv
 PYTHON := $(VENV)/bin/python3
@@ -27,6 +27,9 @@ logs: ## Tail Docker logs
 
 db-shell: ## Open psql shell in the running container
 	docker exec -it vulcan-db psql -U vulcan -d vulcan
+
+db-migrate: ## Run pending database migrations
+	$(PYTHON) -m db.migrate
 
 # ─── Backend ─────────────────────────────────────────────────────────────────
 
