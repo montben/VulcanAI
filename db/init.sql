@@ -69,6 +69,9 @@ CREATE TABLE report_photos (
     original_filename   VARCHAR(255),
     caption             TEXT,
     ai_description      TEXT,
+    clean_caption       TEXT,
+    observations        JSONB,
+    category            VARCHAR(20),
     sort_order          INTEGER NOT NULL DEFAULT 0,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
