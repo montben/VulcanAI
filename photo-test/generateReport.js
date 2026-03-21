@@ -19,7 +19,7 @@ const path = require('path');
 const { Pool } = require('pg');
 
 const { adaptVoicePayload } = require('./voiceAdapter');
-const { enrichPhoto }       = require('./photoEnrichment');
+const { mapReportPhotos }   = require('./photoAdapter');
 const { buildFinalReport }  = require('./reportBuilder');
 const { buildHtml }         = require('./htmlTemplate');
 const { generatePdf }       = require('./pdfGenerator');
@@ -30,42 +30,6 @@ const { generatePdf }       = require('./pdfGenerator');
 
 function log(msg) {
   console.log(`[generateReport] ${msg}`);
-}
-
-// ---------------------------------------------------------------------------
-// Photo enrichment — enrich each row and write results back to DB
-// ---------------------------------------------------------------------------
-
-async function enrichAndSavePhotos(rows, db) {
-  return Promise.all(rows.map(async (row) => {
-    const image_path       = row.file_path        || '';
-    const original_caption = row.caption          || row.original_filename || '';
-
-    let enriched;
-    try {
-      enriched = await enrichPhoto({ image_path, original_caption });
-      log(`  enriched: ${image_path || '(no path)'}`);
-    } catch (err) {
-      console.warn(`[generateReport] WARNING — enrichment failed for "${image_path}": ${err.message}`);
-      enriched = { image_path, original_caption, clean_caption: '', observations: [], category: 'general' };
-    }
-
-    // Write enrichment back to DB if a db connection was provided
-    if (db) {
-      try {
-        await db.query(
-          `UPDATE report_photos
-           SET clean_caption = $1, observations = $2, category = $3
-           WHERE id = $4`,
-          [enriched.clean_caption, JSON.stringify(enriched.observations), enriched.category, row.id]
-        );
-      } catch (err) {
-        console.warn(`[generateReport] WARNING — failed to save enrichment for row ${row.id}: ${err.message}`);
-      }
-    }
-
-    return enriched;
-  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -102,10 +66,10 @@ async function generateReport({ voicePayload, db, outputPdf, outputHtml } = {}) 
       [reportId]
     );
     const rows = result.rows;
-    log(`Enriching ${rows.length} photo(s)...`);
-    enrichedPhotos = await enrichAndSavePhotos(rows, db);
+    log(`Mapping ${rows.length} photo(s)...`);
+    enrichedPhotos = mapReportPhotos(rows);
   } else {
-    log('No db or report_id provided — skipping photo enrichment.');
+    log('No db or report_id provided — skipping photos.');
   }
 
   // 3. Build normalized report object
