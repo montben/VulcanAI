@@ -9,8 +9,8 @@ from pathlib import Path
 
 from PIL import Image
 
-import config
-from models import PhotoAnalysis
+from . import config
+from .models import PhotoAnalysis
 
 logger = logging.getLogger(__name__)
 

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-import config
+from . import config
 
 
 SUPPORTED_AUDIO_EXTENSIONS = {".m4a", ".mp3", ".wav", ".webm", ".ogg", ".mp4"}

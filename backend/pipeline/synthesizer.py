@@ -4,8 +4,8 @@ import json
 import logging
 from pathlib import Path
 
-import config
-from models import DailyReport, PhotoAnalysis, VoiceNoteData
+from . import config
+from .models import DailyReport, PhotoAnalysis, VoiceNoteData
 
 logger = logging.getLogger(__name__)
 

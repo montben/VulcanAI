@@ -22,7 +22,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-from models import DailyReport
+from .models import DailyReport
 
 # ---------------------------------------------------------------------------
 # Color palette (from spec)
