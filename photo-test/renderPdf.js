@@ -73,6 +73,10 @@ function slugify(str) {
 // ---------------------------------------------------------------------------
 
 async function main() {
+  // Redirect console.log to stderr so only the final JSON goes to stdout
+  const originalLog = console.log;
+  console.log = (...args) => process.stderr.write(args.join(' ') + '\n');
+
   const args = parseArgs(process.argv);
 
   // 1. Load report JSON (StructuredDailyReport format)
@@ -114,7 +118,8 @@ async function main() {
   // 8. Generate PDF + HTML
   await generatePdf(html, outputPdfPath, outputHtmlPath);
 
-  // 9. Print result as JSON to stdout
+  // 9. Print result as JSON to stdout (restore original console.log)
+  console.log = originalLog;
   const result = {
     pdf_path:  outputPdfPath,
     html_path: outputHtmlPath,
