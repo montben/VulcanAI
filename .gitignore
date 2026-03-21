@@ -1,6 +1,9 @@
 __pycache__/
 *.pyc
 .env
+backend/.env
 output/*.pdf
 *.resized.jpg
 .DS_Store
+.venv/
+node_modules/

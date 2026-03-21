@@ -1,7 +1,14 @@
 import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-load_dotenv()
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+REPO_ROOT = BACKEND_DIR.parent
+
+for env_path in (REPO_ROOT / ".env", BACKEND_DIR / ".env"):
+    if env_path.exists():
+        load_dotenv(env_path, override=False)
 
 # API Keys — at least one provider required
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -24,4 +31,7 @@ elif OPENAI_API_KEY:
 elif ANTHROPIC_API_KEY:
     PROVIDER = "anthropic"
 else:
-    raise ValueError("Set GROQ_API_KEY, GOOGLE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY in .env")
+    raise ValueError(
+        "Set GROQ_API_KEY, GOOGLE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY "
+        "in .env or backend/.env"
+    )

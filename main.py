@@ -10,20 +10,18 @@ import time
 from datetime import date
 from pathlib import Path
 
-# Defer config import so --help works without .env
-from models import VoiceNoteData
+from backend.pipeline.models import VoiceNoteData
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
-logger = logging.getLogger(__name__)
-
 VERSION = "1.0"
+REPO_ROOT = Path(__file__).resolve().parent
 
 
 def _load_template(template_path: str | None = None) -> dict:
     """Load the report template configuration."""
     if template_path is None:
-        template_path = str(Path(__file__).parent / "templates" / "default_template.json")
-    with open(template_path) as f:
+        template_path = str(REPO_ROOT / "backend" / "pipeline" / "templates" / "default_template.json")
+    with open(template_path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -92,15 +90,15 @@ def main():
 
     # Import config (triggers .env load and API key validation)
     try:
-        import config  # noqa: F401
+        from backend.pipeline import config  # noqa: F401
     except ValueError as e:
         print(f"Configuration error: {e}", file=sys.stderr)
         sys.exit(1)
 
     # Now safe to import modules that depend on config
-    from analyzer import analyze_all_photos
-    from synthesizer import synthesize_report
-    from pdf_generator import generate_report_pdf
+    from backend.pipeline.analyzer import analyze_all_photos
+    from backend.pipeline.pdf_generator import generate_report_pdf
+    from backend.pipeline.synthesizer import synthesize_report
 
     # Banner
     today = date.today().isoformat()

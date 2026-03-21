@@ -5,6 +5,40 @@
 (() => {
   'use strict';
 
+  const DEFAULT_CONFIG = {
+    apiBaseUrl: 'http://localhost:8000',
+    endpoints: {
+      generateReport: '/api/generate',
+      reportProgress: '/api/progress',
+      reportDownload: '/api/download',
+      health: '/api/health',
+      endpointManifest: '/api/endpoints',
+    },
+  };
+
+  function normalizeBaseUrl(url) {
+    return (url || DEFAULT_CONFIG.apiBaseUrl).replace(/\/+$/, '');
+  }
+
+  function resolveConfig() {
+    const runtimeConfig = window.SITESCRIBE_CONFIG || {};
+    return {
+      apiBaseUrl: normalizeBaseUrl(runtimeConfig.apiBaseUrl),
+      endpoints: {
+        ...DEFAULT_CONFIG.endpoints,
+        ...(runtimeConfig.endpoints || {}),
+      },
+    };
+  }
+
+  const APP_CONFIG = resolveConfig();
+  const API_BASE = APP_CONFIG.apiBaseUrl;
+  const ENDPOINTS = APP_CONFIG.endpoints;
+
+  function apiUrl(endpointKey, suffix = '') {
+    return `${API_BASE}${ENDPOINTS[endpointKey]}${suffix}`;
+  }
+
   // ---- Guided Prompt Definitions ----
   const PROMPTS = [
     { id: 1, question: "How many workers are on site today? What trades are present?", shortLabel: "Crew" },
@@ -434,7 +468,7 @@
     startElapsedTimer();
 
     try {
-      const res = await fetch('/api/generate', { method: 'POST', body: formData });
+      const res = await fetch(apiUrl('generateReport'), { method: 'POST', body: formData });
       if (!res.ok) throw new Error(`Server error: ${res.status}`);
       const { job_id } = await res.json();
       listenForProgress(job_id);
@@ -504,7 +538,7 @@
   }
 
   function listenForProgress(jobId) {
-    const source = new EventSource(`/api/progress/${jobId}`);
+    const source = new EventSource(apiUrl('reportProgress', `/${jobId}`));
     let currentStepIdx = -1;
 
     source.onmessage = (event) => {
@@ -566,7 +600,7 @@
     progressSection.hidden = true;
     reportSection.hidden = false;
 
-    downloadBtn.href = data.pdf_url;
+    downloadBtn.href = data.pdf_url.startsWith('http') ? data.pdf_url : `${API_BASE}${data.pdf_url}`;
     const report = data.report;
     renderReport(report);
   }

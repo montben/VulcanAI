@@ -1,0 +1,1 @@
+"""SiteScribe AI backend package."""
