@@ -182,13 +182,34 @@ export default function NewProject() {
   const [locationLat, setLocationLat] = useState<number | null>(null);
   const [locationLng, setLocationLng] = useState<number | null>(null);
   const [addressQuery, setAddressQuery] = useState("");
-  const [addressSuggestions, setAddressSuggestions] = useState<Array<{ display_name: string; lat: string; lon: string }>>([]);
+  const [addressSuggestions, setAddressSuggestions] = useState<Array<{
+    display_name: string;
+    lat: string;
+    lon: string;
+    address: {
+      house_number?: string;
+      road?: string;
+      city?: string;
+      town?: string;
+      village?: string;
+      state?: string;
+      postcode?: string;
+    };
+  }>>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const addressRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Debounced Nominatim search
+  function formatAddress(a: (typeof addressSuggestions)[0]): string {
+    const p = a.address;
+    const street = [p.house_number, p.road].filter(Boolean).join(" ");
+    const city = p.city || p.town || p.village || "";
+    const parts = [street, city, p.state, p.postcode].filter(Boolean);
+    return parts.length > 0 ? parts.join(", ") : a.display_name;
+  }
+
   const searchAddress = useCallback((query: string) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     if (query.length < 3) {
@@ -415,8 +436,9 @@ export default function NewProject() {
                         type="button"
                         className="flex w-full items-start gap-2 px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent first:rounded-t-md last:rounded-b-md"
                         onClick={() => {
-                          setAddressQuery(s.display_name);
-                          setLocation(s.display_name);
+                          const formatted = formatAddress(s);
+                          setAddressQuery(formatted);
+                          setLocation(formatted);
                           setLocationLat(parseFloat(s.lat));
                           setLocationLng(parseFloat(s.lon));
                           setShowSuggestions(false);
@@ -424,7 +446,7 @@ export default function NewProject() {
                         data-testid={`address-option-${i}`}
                       >
                         <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                        <span className="line-clamp-2">{s.display_name}</span>
+                        <span className="line-clamp-2">{formatAddress(s)}</span>
                       </button>
                     ))}
                   </div>
