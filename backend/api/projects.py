@@ -81,11 +81,11 @@ class AddMemberBody(BaseModel):
 
 
 @router.get("", response_model=list[ProjectOut])
-def list_projects(status: str | None = None, db: Session = Depends(get_db)):
+def list_projects(status: str | None = None, limit: int = 50, offset: int = 0, db: Session = Depends(get_db)):
     q = db.query(Project).options(joinedload(Project.member_links).joinedload(ProjectMember.member))
     if status:
         q = q.filter(Project.status == status)
-    projects = q.order_by(Project.created_at.desc()).all()
+    projects = q.order_by(Project.created_at.desc()).limit(limit).offset(offset).all()
 
     result = []
     for p in projects:

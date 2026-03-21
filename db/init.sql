@@ -52,7 +52,8 @@ CREATE TABLE daily_reports (
     weather_summary     TEXT,
     weather_temp_f      REAL,
     weather_conditions  VARCHAR(100),
-    status              VARCHAR(50) NOT NULL DEFAULT 'draft',  -- draft | processing | complete
+    status              VARCHAR(50) NOT NULL DEFAULT 'draft',  -- draft | recording | processing | generated | finalized | failed
+    error_message       TEXT,
     created_by          UUID REFERENCES members(id),
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -67,6 +68,7 @@ CREATE TABLE report_photos (
     file_path           TEXT NOT NULL,
     original_filename   VARCHAR(255),
     caption             TEXT,
+    ai_description      TEXT,
     sort_order          INTEGER NOT NULL DEFAULT 0,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -89,7 +91,20 @@ CREATE TABLE generated_reports (
     report_id       UUID NOT NULL REFERENCES daily_reports(id) ON DELETE CASCADE,
     report_json     JSONB NOT NULL,
     pdf_path        TEXT,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ─── Live voice call sessions ─────────────────────────────────────────────
+
+CREATE TABLE call_sessions (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    report_id        UUID NOT NULL REFERENCES daily_reports(id) ON DELETE CASCADE,
+    status           VARCHAR(50) NOT NULL DEFAULT 'active',  -- active | ended | failed
+    started_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    ended_at         TIMESTAMPTZ,
+    duration_seconds INTEGER,
+    full_transcript  TEXT
 );
 
 -- ─── Indexes ────────────────────────────────────────────────────────────────
@@ -101,3 +116,7 @@ CREATE INDEX idx_daily_reports_date      ON daily_reports(report_date);
 CREATE INDEX idx_report_photos_report    ON report_photos(report_id);
 CREATE INDEX idx_call_transcripts_report ON call_transcripts(report_id);
 CREATE INDEX idx_generated_reports_report ON generated_reports(report_id);
+CREATE INDEX idx_call_sessions_report    ON call_sessions(report_id);
+-- Prevent concurrent active calls on the same report
+CREATE UNIQUE INDEX idx_call_sessions_active_report
+    ON call_sessions(report_id) WHERE status = 'active';

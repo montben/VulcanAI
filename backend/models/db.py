@@ -81,6 +81,7 @@ class DailyReportRecord(Base):
     weather_temp_f: Mapped[float | None] = mapped_column(Float)
     weather_conditions: Mapped[str | None] = mapped_column(String(100))
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="draft")
+    error_message: Mapped[str | None] = mapped_column(Text)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("members.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -89,6 +90,7 @@ class DailyReportRecord(Base):
     photos: Mapped[list[ReportPhoto]] = relationship(back_populates="report", cascade="all, delete-orphan")
     transcripts: Mapped[list[CallTranscript]] = relationship(back_populates="report", cascade="all, delete-orphan")
     generated_reports: Mapped[list[GeneratedReport]] = relationship(back_populates="report", cascade="all, delete-orphan")
+    call_sessions: Mapped[list[CallSession]] = relationship(back_populates="report", cascade="all, delete-orphan")
 
 
 class ReportPhoto(Base):
@@ -99,6 +101,7 @@ class ReportPhoto(Base):
     file_path: Mapped[str] = mapped_column(Text, nullable=False)
     original_filename: Mapped[str | None] = mapped_column(String(255))
     caption: Mapped[str | None] = mapped_column(Text)
+    ai_description: Mapped[str | None] = mapped_column(Text)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -126,5 +129,20 @@ class GeneratedReport(Base):
     report_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
     pdf_path: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     report: Mapped[DailyReportRecord] = relationship(back_populates="generated_reports")
+
+
+class CallSession(Base):
+    __tablename__ = "call_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    report_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("daily_reports.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="active")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    duration_seconds: Mapped[int | None] = mapped_column(Integer)
+    full_transcript: Mapped[str | None] = mapped_column(Text)
+
+    report: Mapped[DailyReportRecord] = relationship(back_populates="call_sessions")

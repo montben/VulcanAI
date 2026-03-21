@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
+import threading
 import uuid
-from datetime import date
+from datetime import date, datetime
+from queue import Empty, Queue
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
+from fastapi.responses import FileResponse
+from starlette.responses import StreamingResponse
 
 from backend.database import get_db  # load_dotenv runs here
 from backend.models.db import (
+    CallSession,
     CallTranscript,
     DailyReportRecord,
     GeneratedReport,
@@ -20,6 +27,9 @@ from backend.models.db import (
 )
 
 router = APIRouter(prefix="/api/projects/{project_id}/reports", tags=["reports"])
+
+# Module-level progress queue storage keyed by report_id
+report_progress_queues: dict[str, Queue] = {}
 
 
 def _get_upload_dir() -> str:
@@ -58,6 +68,14 @@ class ReportCreate(BaseModel):
     created_by: str | None = None
 
 
+class CallSessionOut(BaseModel):
+    id: str
+    status: str
+    started_at: datetime
+    ended_at: datetime | None
+    duration_seconds: int | None
+
+
 class ReportOut(BaseModel):
     id: str
     project_id: str
@@ -66,6 +84,8 @@ class ReportOut(BaseModel):
     weather_temp_f: float | None
     weather_conditions: str | None
     status: str
+    error_message: str | None = None
+    updated_at: datetime | None = None
     photo_count: int = 0
     transcript_count: int = 0
     has_generated_report: bool = False
@@ -78,6 +98,7 @@ class PhotoOut(BaseModel):
     file_path: str
     original_filename: str | None
     caption: str | None
+    ai_description: str | None = None
     sort_order: int
 
 
@@ -92,6 +113,7 @@ class GeneratedReportOut(BaseModel):
     id: str
     report_json: dict
     pdf_path: str | None
+    updated_at: datetime | None = None
 
 
 class ReportDetail(BaseModel):
@@ -102,6 +124,11 @@ class ReportDetail(BaseModel):
     weather_temp_f: float | None
     weather_conditions: str | None
     status: str
+    error_message: str | None = None
+    updated_at: datetime | None = None
+    latest_generated_report: GeneratedReportOut | None = None
+    active_call_session: CallSessionOut | None = None
+    pdf_url: str | None = None
     photos: list[PhotoOut] = Field(default_factory=list)
     transcripts: list[TranscriptOut] = Field(default_factory=list)
     generated_reports: list[GeneratedReportOut] = Field(default_factory=list)
@@ -111,12 +138,19 @@ class ReportDetail(BaseModel):
 
 
 @router.get("", response_model=list[ReportOut])
-def list_reports(project_id: str, db: Session = Depends(get_db)):
+def list_reports(
+    project_id: str,
+    limit: int = 50,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
     pid = _parse_uuid(project_id, "project_id")
     reports = (
         db.query(DailyReportRecord)
         .filter(DailyReportRecord.project_id == pid)
         .order_by(DailyReportRecord.report_date.desc())
+        .limit(limit)
+        .offset(offset)
         .all()
     )
     return [
@@ -124,6 +158,7 @@ def list_reports(project_id: str, db: Session = Depends(get_db)):
             id=str(r.id), project_id=str(r.project_id), report_date=r.report_date,
             weather_summary=r.weather_summary, weather_temp_f=r.weather_temp_f,
             weather_conditions=r.weather_conditions, status=r.status,
+            error_message=r.error_message, updated_at=r.updated_at,
             photo_count=len(r.photos), transcript_count=len(r.transcripts),
             has_generated_report=len(r.generated_reports) > 0,
         )
@@ -164,7 +199,8 @@ def create_report(project_id: str, body: ReportCreate, db: Session = Depends(get
         id=str(report.id), project_id=str(report.project_id),
         report_date=report.report_date, weather_summary=report.weather_summary,
         weather_temp_f=report.weather_temp_f, weather_conditions=report.weather_conditions,
-        status=report.status,
+        status=report.status, error_message=report.error_message,
+        updated_at=report.updated_at,
     )
 
 
@@ -178,6 +214,7 @@ def get_report(project_id: str, report_id: str, db: Session = Depends(get_db)):
             joinedload(DailyReportRecord.photos),
             joinedload(DailyReportRecord.transcripts),
             joinedload(DailyReportRecord.generated_reports),
+            joinedload(DailyReportRecord.call_sessions),
         )
         .filter(DailyReportRecord.id == rid, DailyReportRecord.project_id == pid)
         .first()
@@ -185,14 +222,45 @@ def get_report(project_id: str, report_id: str, db: Session = Depends(get_db)):
     if not report:
         raise HTTPException(404, "Report not found")
 
+    # Determine latest generated report (most recent by created_at)
+    latest_gen = None
+    if report.generated_reports:
+        latest = max(report.generated_reports, key=lambda g: g.created_at)
+        latest_gen = GeneratedReportOut(
+            id=str(latest.id), report_json=latest.report_json,
+            pdf_path=latest.pdf_path, updated_at=latest.updated_at,
+        )
+
+    # Find active call session
+    active_session = None
+    for cs in report.call_sessions:
+        if cs.status == "active":
+            active_session = CallSessionOut(
+                id=str(cs.id), status=cs.status,
+                started_at=cs.started_at, ended_at=cs.ended_at,
+                duration_seconds=cs.duration_seconds,
+            )
+            break
+
+    # Build PDF URL from latest generated report
+    pdf_url = None
+    if report.generated_reports:
+        latest = max(report.generated_reports, key=lambda g: g.created_at)
+        if latest.pdf_path:
+            pdf_url = f"/api/projects/{project_id}/reports/{report_id}/pdf"
+
     return ReportDetail(
         id=str(report.id), project_id=str(report.project_id),
         report_date=report.report_date, weather_summary=report.weather_summary,
         weather_temp_f=report.weather_temp_f, weather_conditions=report.weather_conditions,
-        status=report.status,
+        status=report.status, error_message=report.error_message,
+        updated_at=report.updated_at,
+        latest_generated_report=latest_gen,
+        active_call_session=active_session,
+        pdf_url=pdf_url,
         photos=[
             PhotoOut(id=str(p.id), file_path=p.file_path, original_filename=p.original_filename,
-                     caption=p.caption, sort_order=p.sort_order)
+                     caption=p.caption, ai_description=p.ai_description, sort_order=p.sort_order)
             for p in sorted(report.photos, key=lambda p: p.sort_order)
         ],
         transcripts=[
@@ -201,7 +269,8 @@ def get_report(project_id: str, report_id: str, db: Session = Depends(get_db)):
             for t in report.transcripts
         ],
         generated_reports=[
-            GeneratedReportOut(id=str(g.id), report_json=g.report_json, pdf_path=g.pdf_path)
+            GeneratedReportOut(id=str(g.id), report_json=g.report_json,
+                               pdf_path=g.pdf_path, updated_at=g.updated_at)
             for g in report.generated_reports
         ],
     )
@@ -212,6 +281,38 @@ def delete_report(project_id: str, report_id: str, db: Session = Depends(get_db)
     report = _get_report_for_project(db, project_id, report_id)
     db.delete(report)
     db.commit()
+
+
+# ─── Report progress SSE ────────────────────────────────────────────────────
+
+
+@router.get("/{report_id}/progress")
+async def report_progress(project_id: str, report_id: str):
+    """SSE endpoint for report generation progress."""
+    if report_id not in report_progress_queues:
+        report_progress_queues[report_id] = Queue()
+
+    async def event_generator():
+        queue = report_progress_queues[report_id]
+        while True:
+            try:
+                msg = queue.get_nowait()
+                yield f"data: {json.dumps(msg)}\n\n"
+                if msg.get("stage") in ("complete", "error"):
+                    break
+            except Empty:
+                yield ": keepalive\n\n"
+                await asyncio.sleep(1)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ─── Photo upload ────────────────────────────────────────────────────────────
@@ -252,7 +353,8 @@ async def upload_photo(
     return PhotoOut(
         id=str(record.id), file_path=record.file_path,
         original_filename=record.original_filename,
-        caption=record.caption, sort_order=record.sort_order,
+        caption=record.caption, ai_description=record.ai_description,
+        sort_order=record.sort_order,
     )
 
 
@@ -306,8 +408,222 @@ def save_generated_report(
         pdf_path=body.pdf_path,
     )
     db.add(record)
-    report.status = "complete"
+    report.status = "generated"
 
     db.commit()
     db.refresh(record)
-    return GeneratedReportOut(id=str(record.id), report_json=record.report_json, pdf_path=record.pdf_path)
+    return GeneratedReportOut(id=str(record.id), report_json=record.report_json,
+                              pdf_path=record.pdf_path, updated_at=record.updated_at)
+
+
+# ─── Generate & Draft endpoints ─────────────────────────────────────────────
+
+
+class GenerateRequest(BaseModel):
+    quality_mode: str = "standard"  # "standard" or "high"
+
+
+@router.post("/{report_id}/generate", status_code=202)
+def generate_report(
+    project_id: str,
+    report_id: str,
+    body: GenerateRequest = GenerateRequest(),
+    db: Session = Depends(get_db),
+):
+    """Run or re-run the pipeline from stored inputs."""
+    report = _get_report_for_project(db, project_id, report_id)
+
+    # Reject if already processing (409)
+    if report.status == "processing":
+        raise HTTPException(409, "Report is already being processed")
+
+    # Validate report has stored transcript or photos
+    rid = _parse_uuid(report_id, "report_id")
+    has_photos = db.query(ReportPhoto).filter(ReportPhoto.report_id == rid).count() > 0
+    has_transcript = (
+        db.query(CallTranscript).filter(CallTranscript.report_id == rid).count() > 0
+        or db.query(CallSession).filter(
+            CallSession.report_id == rid,
+            CallSession.status == "ended",
+            CallSession.full_transcript.isnot(None),
+        ).count() > 0
+    )
+    if not has_photos and not has_transcript:
+        raise HTTPException(422, "Report has no photos or transcripts to generate from")
+
+    # Transition status
+    from backend.utils.status import transition_status
+    transition_status(report, "processing")
+    db.commit()
+
+    # Set up progress queue
+    progress_queue = Queue()
+    report_progress_queues[report_id] = progress_queue
+
+    # Run pipeline in background thread
+    from backend.pipeline.orchestrator import run_report_pipeline
+
+    worker = threading.Thread(
+        target=run_report_pipeline,
+        args=(uuid.UUID(report_id),),
+        kwargs={"quality_mode": body.quality_mode, "progress_queue": progress_queue},
+        daemon=True,
+    )
+    worker.start()
+
+    return {"status": "processing", "report_id": report_id}
+
+
+class DraftReportUpdate(BaseModel):
+    report_json: dict  # Validated against StructuredDailyReport
+
+
+@router.put("/{report_id}/draft-report")
+def update_draft_report(
+    project_id: str,
+    report_id: str,
+    body: DraftReportUpdate,
+    db: Session = Depends(get_db),
+):
+    """Persist manual edits to the generated report JSON."""
+    report = _get_report_for_project(db, project_id, report_id)
+
+    # Validate against StructuredDailyReport schema
+    from backend.pipeline.schemas import StructuredDailyReport
+    try:
+        StructuredDailyReport.model_validate(body.report_json)
+    except Exception as e:
+        raise HTTPException(422, f"Invalid report JSON: {e}")
+
+    rid = _parse_uuid(report_id, "report_id")
+
+    # Upsert: update latest GeneratedReport or create new one
+    latest = (
+        db.query(GeneratedReport)
+        .filter(GeneratedReport.report_id == rid)
+        .order_by(GeneratedReport.created_at.desc())
+        .first()
+    )
+
+    if latest:
+        latest.report_json = body.report_json
+        # Touch updated_at
+        from sqlalchemy.sql import func
+        latest.updated_at = func.now()
+    else:
+        latest = GeneratedReport(
+            report_id=rid,
+            report_json=body.report_json,
+        )
+        db.add(latest)
+
+    db.commit()
+    db.refresh(latest)
+
+    return GeneratedReportOut(
+        id=str(latest.id),
+        report_json=latest.report_json,
+        pdf_path=latest.pdf_path,
+        updated_at=latest.updated_at,
+    )
+
+
+# ─── Finalize & PDF download ─────────────────────────────────────────────────
+
+
+class FinalizeRequest(BaseModel):
+    report_json: dict | None = None  # Optional: uses latest generated if not provided
+
+
+@router.post("/{report_id}/finalize")
+def finalize_report(
+    project_id: str,
+    report_id: str,
+    body: FinalizeRequest = FinalizeRequest(),
+    db: Session = Depends(get_db),
+):
+    """Validate the report JSON, generate a PDF, and transition to finalized."""
+    report = _get_report_for_project(db, project_id, report_id)
+    rid = _parse_uuid(report_id, "report_id")
+
+    # Get report JSON
+    if body.report_json:
+        from backend.pipeline.schemas import StructuredDailyReport
+        try:
+            structured = StructuredDailyReport.model_validate(body.report_json)
+        except Exception as e:
+            raise HTTPException(422, f"Invalid report JSON: {e}")
+        report_data = body.report_json
+    else:
+        latest = (
+            db.query(GeneratedReport)
+            .filter(GeneratedReport.report_id == rid)
+            .order_by(GeneratedReport.created_at.desc())
+            .first()
+        )
+        if not latest:
+            raise HTTPException(404, "No generated report found. Run /generate first.")
+        from backend.pipeline.schemas import StructuredDailyReport
+        structured = StructuredDailyReport.model_validate(latest.report_json)
+        report_data = latest.report_json
+
+    # Generate PDF
+    upload_dir = _get_upload_dir()
+    pdf_dir = os.path.join(upload_dir, project_id, report_id)
+    os.makedirs(pdf_dir, exist_ok=True)
+
+    safe_name = structured.metadata.project_name.replace(" ", "_").replace("/", "_")
+    pdf_filename = f"{structured.metadata.report_date}_{safe_name}.pdf"
+    pdf_path = os.path.join(pdf_dir, pdf_filename)
+
+    from backend.pipeline.pdf_generator_v2 import generate_report_pdf_v2
+    generate_report_pdf_v2(structured, pdf_dir, pdf_path)
+
+    # Update or create GeneratedReport with pdf_path
+    latest = (
+        db.query(GeneratedReport)
+        .filter(GeneratedReport.report_id == rid)
+        .order_by(GeneratedReport.created_at.desc())
+        .first()
+    )
+
+    if latest:
+        latest.report_json = report_data
+        latest.pdf_path = pdf_path
+    else:
+        latest = GeneratedReport(report_id=rid, report_json=report_data, pdf_path=pdf_path)
+        db.add(latest)
+
+    # Transition to finalized
+    from backend.utils.status import transition_status
+    transition_status(report, "finalized")
+    db.commit()
+
+    return {"pdf_url": f"/api/projects/{project_id}/reports/{report_id}/pdf"}
+
+
+@router.get("/{report_id}/pdf")
+def download_report_pdf(
+    project_id: str,
+    report_id: str,
+    db: Session = Depends(get_db),
+):
+    """Download the finalized report PDF."""
+    _get_report_for_project(db, project_id, report_id)
+    rid = _parse_uuid(report_id, "report_id")
+
+    latest = (
+        db.query(GeneratedReport)
+        .filter(GeneratedReport.report_id == rid)
+        .order_by(GeneratedReport.created_at.desc())
+        .first()
+    )
+
+    if not latest or not latest.pdf_path or not os.path.exists(latest.pdf_path):
+        raise HTTPException(404, "PDF not found. Run /finalize first.")
+
+    return FileResponse(
+        latest.pdf_path,
+        media_type="application/pdf",
+        filename=os.path.basename(latest.pdf_path),
+    )
