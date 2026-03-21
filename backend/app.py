@@ -21,6 +21,7 @@ from queue import Empty, Queue
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.responses import StreamingResponse
 
 from backend.api.members import router as members_router
@@ -41,6 +42,7 @@ DEFAULT_FRONTEND_ORIGINS = (
     "http://localhost:4173",
     "http://localhost:5173",
 )
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 TEMPLATE_PATH = Path(__file__).resolve().parent / "pipeline" / "templates" / "default_template.json"
 TEMPLATE_CONFIG = json.loads(TEMPLATE_PATH.read_text(encoding="utf-8"))
 
@@ -220,19 +222,40 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+UPLOADS_DIR = Path(__file__).resolve().parent.parent / "uploads"
+UPLOADS_DIR.mkdir(exist_ok=True)
+
 app.include_router(projects_router)
 app.include_router(members_router)
 app.include_router(reports_router)
 
 
+@app.post("/api/uploads/image")
+async def upload_image(file: UploadFile = File(...)) -> dict[str, str]:
+    """Save an uploaded image and return its public URL."""
+    suffix = Path(file.filename).suffix.lower() if file.filename else ".jpg"
+    filename = f"{uuid.uuid4()}{suffix}"
+    dest = UPLOADS_DIR / filename
+    dest.write_bytes(await file.read())
+    return {"url": f"/uploads/{filename}"}
+
+
+app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
+
+
 @app.get("/")
-async def root() -> dict[str, object]:
+async def root():
+    if FRONTEND_DIR.exists():
+        return FileResponse(FRONTEND_DIR / "index.html")
     return {
         "service": "sitescribe-backend",
-        "message": "Frontend assets live in ./frontend. Backend docs are available at /api/docs.",
         "docs_url": app.docs_url,
-        "openapi_url": app.openapi_url,
     }
+
+
+# Serve frontend static assets (must be mounted after all API routes)
+if FRONTEND_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIR / "assets"), name="frontend-assets")
 
 
 @app.get("/api/health")
