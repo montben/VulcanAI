@@ -1,140 +1,74 @@
-# Vulcan
+# Vulcan AI
 
-Construction project management + AI-powered daily reports. Built for small construction companies and contractors to track projects, upload jobsite photos, record voice notes via Deepgram, and generate structured PDF reports via Groq.
-
-## Prerequisites
-
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Postgres runs in a container)
-- Python 3.10+
-- [uv](https://docs.astral.sh/uv/) (`brew install uv` or `pip install uv`)
+Turn jobsite photos into finished construction paperwork in under 60 seconds. Contractors snap photos, answer a quick voice call, and Vulcan delivers a branded PDF daily report — no typing, no templates, no desk work.
 
 ## Quick Start
 
 ```bash
-make setup      # creates venv, installs deps, copies .env, starts Postgres
+docker compose up --build
 ```
 
-Then in two separate terminals:
+Or without Docker:
 
 ```bash
-make backend    # FastAPI on http://localhost:8000
-make frontend   # Static server on http://localhost:3000
+cd backend
+pip3 install -r requirements.txt
+cp .env.example .env
+# Add your API key to .env
+python3 -m uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open `http://localhost:8000`.
 
-## Makefile Commands
+## How It Works
 
-| Command | What it does |
-|---------|--------------|
-| `make setup` | First-time setup: venv, deps, .env, start DB |
-| `make up` | Start Postgres + pgAdmin containers |
-| `make down` | Stop all containers |
-| `make backend` | Run the FastAPI backend (port 8000) |
-| `make frontend` | Serve the frontend (port 3000) |
-| `make db-shell` | Open a psql shell in the running Postgres container |
-| `make db-reset` | Wipe the database and re-run the schema |
-| `make logs` | Tail Docker container logs |
-| `make help` | Show all available commands |
+1. **Upload photos** — drag and drop jobsite photos, add optional captions
+2. **Voice intake** — AI asks targeted questions (crew, deliveries, safety, tomorrow's plan)
+3. **AI generates report** — photos analyzed via GPT-4o Vision, voice transcribed via Whisper, synthesized into a structured daily report
+4. **Download PDF** — branded, professional report ready to send
 
-## Services
-
-| Service | URL | Credentials |
-|---------|-----|-------------|
-| Backend API | http://localhost:8000/api/docs | — |
-| Frontend | http://localhost:3000 | — |
-| pgAdmin | http://localhost:5050 | admin@vulcan.dev / admin |
-| Postgres | localhost:5432 | vulcan / vulcan_dev / vulcan |
-
-## Repo Layout
+## Architecture
 
 ```
-backend/           FastAPI API, AI pipeline, PDF generation
-  api/             CRUD routes (projects, members, reports)
-  models/          SQLAlchemy ORM models
-  pipeline/        AI analysis, synthesis, transcription, PDF gen
-  database.py      DB engine + session dependency
-frontend/          Static browser UI (vanilla JS)
-db/init.sql        Postgres schema (auto-run by Docker)
-docker-compose.yml Postgres + pgAdmin
-Makefile           Dev commands
-main.py            CLI entrypoint for the report pipeline
+backend/                  — Python/FastAPI
+  app.py                  — Main FastAPI application
+  api/                    — REST endpoints (projects, reports, members)
+  pipeline/               — AI pipeline (analyzer, synthesizer, PDF gen, transcriber)
+  models/                 — Database models
+  database.py             — PostgreSQL connection
+
+frontend/                 — Built UI (served by backend)
+  index.html              — Entry point
+  assets/                 — CSS, JS, images
+
+client/                   — React source (for development)
+  src/pages/
+    dashboard.tsx          — Project grid
+    new-project.tsx        — Create project form
+    project.tsx            — Timeline with date picker
+    create-report.tsx      — Photo upload → voice call → generating → done
+
+db/                       — Database init scripts
+docker-compose.yml        — Docker setup (backend + Postgres)
 ```
 
 ## API Endpoints
 
-### Project management (Vulcan)
+- `POST /api/generate` — Start report generation (photos + voice)
+- `GET /api/progress/{job_id}` — SSE progress stream
+- `GET /api/download/{job_id}` — Download generated PDF
+- `GET /api/projects` — List projects
+- `POST /api/projects` — Create project
+- `GET /api/reports` — List reports
+- `POST /api/reports` — Create report
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/api/projects` | List all projects |
-| `POST` | `/api/projects` | Create a project |
-| `GET` | `/api/projects/{id}` | Get project detail + members |
-| `PATCH` | `/api/projects/{id}` | Update a project |
-| `DELETE` | `/api/projects/{id}` | Delete a project |
-| `POST` | `/api/projects/{id}/members` | Assign a member to a project |
-| `DELETE` | `/api/projects/{id}/members/{member_id}` | Remove a member |
-| `GET` | `/api/members` | List all team members |
-| `POST` | `/api/members` | Create a team member |
-| `GET/PATCH/DELETE` | `/api/members/{id}` | Member CRUD |
-| `GET` | `/api/projects/{id}/reports` | List daily reports for a project |
-| `POST` | `/api/projects/{id}/reports` | Create a daily report |
-| `GET` | `/api/projects/{id}/reports/{report_id}` | Full report detail (photos, transcripts, generated) |
-| `POST` | `/api/projects/{id}/reports/{report_id}/photos` | Upload a photo with caption |
-| `POST` | `/api/projects/{id}/reports/{report_id}/transcripts` | Save a call transcript |
-| `POST` | `/api/projects/{id}/reports/{report_id}/generated` | Save AI-generated report JSON + PDF |
+## Tech Stack
 
-### AI pipeline (legacy)
+- **Backend:** Python, FastAPI, PostgreSQL, ReportLab
+- **AI:** GPT-4o Vision, Whisper (Groq), multi-provider LLM
+- **Frontend:** React, Tailwind CSS, shadcn/ui
+- **Fonts:** General Sans + Cabinet Grotesk (Fontshare)
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| `POST` | `/api/generate` | Start report generation |
-| `GET` | `/api/progress/{job_id}` | SSE stream for job progress |
-| `GET` | `/api/download/{job_id}` | Download generated PDF |
-| `GET` | `/api/health` | Health check |
-| `GET` | `/api/endpoints` | Endpoint manifest |
+## Team
 
-Full interactive docs at http://localhost:8000/api/docs.
-
-## Environment
-
-Copy `.env.example` to `.env` (done automatically by `make setup`). Required keys:
-
-```
-GROQ_API_KEY=gsk_your_key_here
-DEEPGRAM_API_KEY=your_deepgram_key_here
-```
-
-Get a free Groq key at [console.groq.com](https://console.groq.com). Get a free Deepgram key at [console.deepgram.com](https://console.deepgram.com).
-
-See `.env.example` for all available options (model overrides, database URL, upload dir, CORS origins).
-
-## API Providers
-
-Vulcan auto-detects the first configured provider:
-
-| Priority | Provider | Free Tier |
-|----------|----------|-----------|
-| 1 | Groq | Yes |
-| 2 | Google Gemini | Limited |
-| 3 | OpenAI | No |
-| 4 | Anthropic | No |
-
-## CLI Usage
-
-Run the report pipeline directly without the web UI:
-
-```bash
-make backend  # needs to be running for DB access
-
-python3 main.py --photos ./sample_input --notes ./notes.txt \
-    --company "ABC Construction" --project "Smith Residence Remodel"
-```
-
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `--photos` | `./sample_input/` | Folder of jobsite photos |
-| `--notes` | None | `.txt` file with voice notes |
-| `--company` | `Construction Co.` | Company name for report header |
-| `--project` | `Project` | Project name for report header |
-| `--output` | `./output/` | Output directory for generated PDF |
+Built at Pi Hacks — March 2026
