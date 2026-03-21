@@ -3,13 +3,15 @@
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
 from . import config
 from .analyzer import analyze_photo
+from .json_utils import parse_json_response
 from .models import PhotoAnalysis
 from .schemas import StructuredDailyReport
 
@@ -20,6 +22,30 @@ _PROMPTS_DIR = Path(__file__).parent / "prompts"
 _TRANSCRIPT_PROMPT = (_PROMPTS_DIR / "transcript_analysis.txt").read_text()
 _SYNTHESIS_V2_PROMPT = (_PROMPTS_DIR / "report_synthesis_v2.txt").read_text()
 _REVIEW_PROMPT = (_PROMPTS_DIR / "report_review.txt").read_text()
+
+# ---------------------------------------------------------------------------
+# Lazy-cached LLM clients
+# ---------------------------------------------------------------------------
+
+_groq_client = None
+_openai_client = None
+
+
+def _get_groq_client():
+    global _groq_client
+    if _groq_client is None:
+        from groq import Groq
+        _groq_client = Groq(api_key=config.GROQ_API_KEY)
+    return _groq_client
+
+
+def _get_openai_client():
+    global _openai_client
+    if _openai_client is None:
+        from openai import OpenAI
+        _openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
+    return _openai_client
+
 
 _WORK_STATUS_ALIASES = {
     "complete": "completed",
@@ -58,26 +84,6 @@ _PRIORITY_ALIASES = {
 # ---------------------------------------------------------------------------
 # Shared LLM call helper — mirrors the provider pattern from synthesizer.py
 # ---------------------------------------------------------------------------
-
-def _parse_json_response(text: str) -> dict:
-    """Extract and parse JSON from LLM response, handling code fences and preamble."""
-    stripped = text.strip()
-
-    if "```" in stripped:
-        fence_start = stripped.index("```")
-        after_fence = stripped[fence_start + 3:]
-        if "\n" in after_fence:
-            after_fence = after_fence.split("\n", 1)[1]
-        if "```" in after_fence:
-            after_fence = after_fence[:after_fence.rindex("```")]
-        stripped = after_fence.strip()
-
-    if not stripped.startswith("{"):
-        brace = stripped.find("{")
-        if brace != -1:
-            stripped = stripped[brace:]
-
-    return json.loads(stripped)
 
 
 def _string(value: Any, default: str = "") -> str:
@@ -248,9 +254,7 @@ def _llm_call(system_prompt: str, user_message: str, *, max_tokens: int = 4096, 
 
 
 def _llm_call_groq(system_prompt: str, user_message: str, *, max_tokens: int, temperature: float) -> dict:
-    from groq import Groq
-
-    client = Groq(api_key=config.GROQ_API_KEY)
+    client = _get_groq_client()
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message},
@@ -259,13 +263,14 @@ def _llm_call_groq(system_prompt: str, user_message: str, *, max_tokens: int, te
     last_error = None
     for attempt in range(3):
         if attempt > 0:
-            time.sleep(5)
+            time.sleep(1)
         try:
             response = client.chat.completions.create(
                 model=config.SYNTHESIS_MODEL,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                response_format={"type": "json_object"},
             )
         except Exception as api_exc:
             last_error = api_exc
@@ -279,7 +284,7 @@ def _llm_call_groq(system_prompt: str, user_message: str, *, max_tokens: int, te
             continue
 
         try:
-            return _parse_json_response(raw_text)
+            return parse_json_response(raw_text)
         except (json.JSONDecodeError, Exception) as exc:
             last_error = exc
             logger.warning("Bad JSON from Groq (attempt %d): %s", attempt + 1, exc)
@@ -302,7 +307,7 @@ def _llm_call_google(system_prompt: str, user_message: str, *, max_tokens: int, 
         )
         raw_text = response.text
         try:
-            return _parse_json_response(raw_text)
+            return parse_json_response(raw_text)
         except (json.JSONDecodeError, Exception) as exc:
             last_error = exc
             if attempt == 0:
@@ -313,9 +318,7 @@ def _llm_call_google(system_prompt: str, user_message: str, *, max_tokens: int, 
 
 
 def _llm_call_openai(system_prompt: str, user_message: str, *, max_tokens: int, temperature: float) -> dict:
-    from openai import OpenAI
-
-    client = OpenAI(api_key=config.OPENAI_API_KEY)
+    client = _get_openai_client()
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message},
@@ -328,10 +331,11 @@ def _llm_call_openai(system_prompt: str, user_message: str, *, max_tokens: int, 
             messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
+            response_format={"type": "json_object"},
         )
         raw_text = response.choices[0].message.content
         try:
-            return _parse_json_response(raw_text)
+            return parse_json_response(raw_text)
         except (json.JSONDecodeError, Exception) as exc:
             last_error = exc
             if attempt == 0:
@@ -375,52 +379,80 @@ def analyze_transcript(
 # Agent 2: Photo Batch Analysis
 # ---------------------------------------------------------------------------
 
-def analyze_photos_batch(photos: list, db_session: Session) -> list[dict]:
+def _analyze_single_photo(photo, idx: int, total: int) -> tuple[int, str, str]:
+    """Analyze a single photo and return (index, filename, ai_description)."""
+    filename = photo.original_filename or Path(photo.file_path).name
+    logger.info("[%d/%d] Analyzing photo %s", idx, total, filename)
+
+    try:
+        analysis: PhotoAnalysis = analyze_photo(photo.file_path)
+        ai_desc_parts = []
+        if analysis.work_identified:
+            ai_desc_parts.append(f"Work: {'; '.join(analysis.work_identified)}")
+        if analysis.materials_visible:
+            ai_desc_parts.append(f"Materials: {'; '.join(analysis.materials_visible)}")
+        if analysis.equipment_visible:
+            ai_desc_parts.append(f"Equipment: {'; '.join(analysis.equipment_visible)}")
+        if analysis.progress_notes:
+            ai_desc_parts.append(f"Progress: {analysis.progress_notes}")
+        if analysis.safety_observations:
+            ai_desc_parts.append(f"Safety: {'; '.join(analysis.safety_observations)}")
+        if analysis.issues_or_concerns:
+            ai_desc_parts.append(f"Issues: {'; '.join(analysis.issues_or_concerns)}")
+        ai_description = ". ".join(ai_desc_parts) if ai_desc_parts else analysis.progress_notes or "No details extracted"
+    except Exception as exc:
+        logger.warning("Photo analysis failed for %s: %s", filename, exc)
+        ai_description = f"Analysis failed: {exc}"
+
+    if photo.caption:
+        ai_description = f"{photo.caption} — {ai_description}"
+
+    return idx, filename, ai_description
+
+
+def analyze_photos_batch(
+    photos: list,
+    db_session: Session,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> list[dict]:
     """Analyze each photo using the vision model and persist AI descriptions.
 
     Args:
         photos: list of ReportPhoto ORM objects
         db_session: active SQLAlchemy session for saving ai_description
+        on_progress: optional callback called after each photo with (completed, total)
 
     Returns:
         List of dicts with filename, caption, ai_description for each photo.
     """
-    results = []
-    for idx, photo in enumerate(photos, start=1):
-        filename = photo.original_filename or Path(photo.file_path).name
-        logger.info("[%d/%d] Analyzing photo %s", idx, len(photos), filename)
+    total = len(photos)
+    # Pre-allocate results list to maintain order
+    results: list[dict | None] = [None] * total
+    completed_count = 0
 
-        try:
-            analysis: PhotoAnalysis = analyze_photo(photo.file_path)
-            ai_desc_parts = []
-            if analysis.work_identified:
-                ai_desc_parts.append(f"Work: {'; '.join(analysis.work_identified)}")
-            if analysis.materials_visible:
-                ai_desc_parts.append(f"Materials: {'; '.join(analysis.materials_visible)}")
-            if analysis.equipment_visible:
-                ai_desc_parts.append(f"Equipment: {'; '.join(analysis.equipment_visible)}")
-            if analysis.progress_notes:
-                ai_desc_parts.append(f"Progress: {analysis.progress_notes}")
-            if analysis.safety_observations:
-                ai_desc_parts.append(f"Safety: {'; '.join(analysis.safety_observations)}")
-            if analysis.issues_or_concerns:
-                ai_desc_parts.append(f"Issues: {'; '.join(analysis.issues_or_concerns)}")
-            ai_description = ". ".join(ai_desc_parts) if ai_desc_parts else analysis.progress_notes or "No details extracted"
-        except Exception as exc:
-            logger.warning("Photo analysis failed for %s: %s", filename, exc)
-            ai_description = f"Analysis failed: {exc}"
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        future_to_idx = {
+            executor.submit(_analyze_single_photo, photo, idx + 1, total): idx
+            for idx, photo in enumerate(photos)
+        }
 
-        if photo.caption:
-            ai_description = f"{photo.caption} — {ai_description}"
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            photo = photos[idx]
+            _, filename, ai_description = future.result()
 
-        photo.ai_description = ai_description
-        db_session.add(photo)
+            photo.ai_description = ai_description
+            db_session.add(photo)
 
-        results.append({
-            "filename": filename,
-            "caption": photo.caption or "",
-            "ai_description": ai_description,
-        })
+            results[idx] = {
+                "filename": filename,
+                "caption": photo.caption or "",
+                "ai_description": ai_description,
+            }
+
+            completed_count += 1
+            if on_progress is not None:
+                on_progress(completed_count, total)
 
     db_session.flush()
     return results

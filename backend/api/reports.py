@@ -567,17 +567,23 @@ def finalize_report(
         structured = StructuredDailyReport.model_validate(latest.report_json)
         report_data = latest.report_json
 
-    # Generate PDF
+    # Build photo rows for the Node.js PDF renderer
+    photo_rows = [
+        {
+            "file_path": p.file_path,
+            "caption": p.caption or "",
+            "original_filename": p.original_filename or "",
+            "ai_description": p.ai_description or "",
+        }
+        for p in sorted(report.photos, key=lambda p: p.sort_order)
+    ]
+
+    # Generate PDF via Node.js HTML→Puppeteer pipeline
     upload_dir = _get_upload_dir()
     pdf_dir = os.path.join(upload_dir, project_id, report_id)
-    os.makedirs(pdf_dir, exist_ok=True)
 
-    safe_name = structured.metadata.project_name.replace(" ", "_").replace("/", "_")
-    pdf_filename = f"{structured.metadata.report_date}_{safe_name}.pdf"
-    pdf_path = os.path.join(pdf_dir, pdf_filename)
-
-    from backend.pipeline.pdf_generator_v2 import generate_report_pdf_v2
-    generate_report_pdf_v2(structured, pdf_dir, pdf_path)
+    from backend.pipeline.pdf_node import generate_pdf_node
+    pdf_path = generate_pdf_node(structured, photo_rows, pdf_dir)
 
     # Update or create GeneratedReport with pdf_path
     latest = (
