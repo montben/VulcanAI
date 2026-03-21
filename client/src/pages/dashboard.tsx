@@ -44,13 +44,14 @@ interface Project {
 }
 
 /* ─── Fallback images when no profile_image_url is set ─── */
-import project1 from "@assets/project-1.jpg";
-import project2 from "@assets/project-2.jpg";
-import project3 from "@assets/project-3.jpg";
+// These images live in frontend/assets/ and are served directly
+const FALLBACK_IMAGES = [
+  "/assets/project-1-K5HTfrPo.jpg",
+  "/assets/project-2-DOz_31jE.jpg",
+  "/assets/project-3-CG2mWqkb.jpg",
+];
 
-const FALLBACK_IMAGES = [project1, project2, project3];
-
-function getFallbackImage(index: number) {
+function getFallbackImage(index: number): string {
   return FALLBACK_IMAGES[index % FALLBACK_IMAGES.length];
 }
 

@@ -159,12 +159,14 @@ function PhotosStep({
   onNext,
   isUploading,
   uploadProgress,
+  projectId,
 }: {
   photos: PhotoEntry[];
   setPhotos: React.Dispatch<React.SetStateAction<PhotoEntry[]>>;
   onNext: () => void;
   isUploading: boolean;
   uploadProgress: string;
+  projectId: string;
 }) {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -547,7 +549,7 @@ function GeneratingStep({ onDone }: { onDone: () => void }) {
 }
 
 /* ─── Step 4: Done ─── */
-function DoneStep() {
+function DoneStep({ projectId }: { projectId: string }) {
   return (
     <div className="step-enter flex flex-col items-center gap-6 pt-12 pb-8">
       <div
@@ -686,11 +688,12 @@ export default function CreateReport() {
             onNext={handleNextToCall}
             isUploading={isUploading}
             uploadProgress={uploadProgress}
+            projectId={projectId}
           />
         )}
         {step === "call" && <CallStep onFinish={handleCallFinish} />}
         {step === "generating" && <GeneratingStep onDone={handleGeneratingDone} />}
-        {step === "done" && <DoneStep />}
+        {step === "done" && <DoneStep projectId={projectId} />}
       </main>
 
       <PerplexityAttribution />

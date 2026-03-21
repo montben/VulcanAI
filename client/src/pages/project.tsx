@@ -4,6 +4,7 @@ import { useTheme } from "@/components/ThemeProvider";
 import { PerplexityAttribution } from "@/components/PerplexityAttribution";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Sun,
   Moon,
@@ -13,130 +14,72 @@ import {
   ChevronLeft,
   ChevronRight,
   Camera,
-  Clock,
   CheckCircle2,
   Calendar,
+  Clock,
 } from "lucide-react";
 import { Link, useParams } from "wouter";
+import { useQuery } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 
-/* ─── Generate dates from project start ─── */
-function generateDates(startStr: string, count: number) {
-  const dates: Date[] = [];
-  const start = new Date(startStr);
-  for (let i = 0; i < count; i++) {
-    const d = new Date(start);
-    d.setDate(start.getDate() + i);
-    dates.push(d);
-  }
-  return dates;
+/* ─── Types ─── */
+interface ProjectOut {
+  id: string;
+  name: string;
+  client: string | null;
+  start_date: string | null;
+  status: string;
+  members: { id: string; name: string; role: string }[];
 }
 
+interface ReportOut {
+  id: string;
+  report_date: string;
+  status: string;
+  photo_count: number;
+  has_generated_report: boolean;
+  updated_at: string | null;
+}
+
+/* ─── Date helpers ─── */
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
 ];
 
+function dateKey(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function formatFullDate(d: Date) {
   const dayName = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][d.getDay()];
   return `${dayName}, ${MONTH_NAMES[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
 }
 
-function dateKey(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+function generateDateRange(startStr: string | null): Date[] {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // Start from project start date, or 30 days ago if not set
+  const start = startStr ? new Date(startStr + "T00:00:00") : new Date(today.getTime() - 30 * 86400000);
+  start.setHours(0, 0, 0, 0);
+
+  // End: today + 14 days
+  const end = new Date(today.getTime() + 14 * 86400000);
+
+  const dates: Date[] = [];
+  const cur = new Date(start);
+  while (cur <= end) {
+    dates.push(new Date(cur));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return dates;
 }
-
-/* ─── Mock data ─── */
-interface DayReport {
-  title: string;
-  photoCount: number;
-  crewSize: number;
-  time: string;
-}
-
-// Simulate reports for some dates
-const MOCK_REPORTS: Record<string, DayReport> = {
-  "2026-03-05": {
-    title: "Foundation pour — east wing",
-    photoCount: 14,
-    crewSize: 8,
-    time: "4:32 PM",
-  },
-  "2026-03-06": {
-    title: "Foundation curing & formwork removal",
-    photoCount: 8,
-    crewSize: 5,
-    time: "3:15 PM",
-  },
-  "2026-03-07": {
-    title: "Framing — first floor walls",
-    photoCount: 22,
-    crewSize: 10,
-    time: "5:01 PM",
-  },
-  "2026-03-10": {
-    title: "Framing — second floor joists",
-    photoCount: 18,
-    crewSize: 9,
-    time: "4:48 PM",
-  },
-  "2026-03-11": {
-    title: "Electrical rough-in started",
-    photoCount: 11,
-    crewSize: 7,
-    time: "5:22 PM",
-  },
-  "2026-03-12": {
-    title: "Plumbing rough-in & HVAC",
-    photoCount: 15,
-    crewSize: 8,
-    time: "4:10 PM",
-  },
-  "2026-03-13": {
-    title: "Framing inspection passed",
-    photoCount: 9,
-    crewSize: 6,
-    time: "2:45 PM",
-  },
-  "2026-03-14": {
-    title: "Exterior sheathing",
-    photoCount: 20,
-    crewSize: 10,
-    time: "5:15 PM",
-  },
-  "2026-03-17": {
-    title: "Window & door frames installed",
-    photoCount: 16,
-    crewSize: 7,
-    time: "4:30 PM",
-  },
-  "2026-03-18": {
-    title: "Roofing — trusses set",
-    photoCount: 25,
-    crewSize: 12,
-    time: "5:45 PM",
-  },
-  "2026-03-19": {
-    title: "Roofing — sheathing & felt paper",
-    photoCount: 13,
-    crewSize: 8,
-    time: "3:50 PM",
-  },
-  "2026-03-20": {
-    title: "Roofing — shingle install day 1",
-    photoCount: 19,
-    crewSize: 9,
-    time: "4:55 PM",
-  },
-};
-
-const PROJECT_START = "2026-03-04";
-const ALL_DATES = generateDates(PROJECT_START, 30);
 
 /* ─── Navbar ─── */
 function Navbar() {
   const { theme, toggleTheme } = useTheme();
-
   return (
     <nav className="sticky top-0 z-50 w-full border-b bg-background/80 backdrop-blur-sm" data-testid="navbar">
       <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
@@ -146,14 +89,7 @@ function Navbar() {
             Vulcan<span className="ml-1 text-xs font-medium text-muted-foreground">AI</span>
           </span>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={toggleTheme}
-          data-testid="theme-toggle"
-          aria-label="Toggle dark mode"
-          className="h-9 w-9"
-        >
+        <Button variant="ghost" size="icon" onClick={toggleTheme} data-testid="theme-toggle" aria-label="Toggle dark mode" className="h-9 w-9">
           {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
         </Button>
       </div>
@@ -165,40 +101,26 @@ function Navbar() {
 const DateCell = React.forwardRef<HTMLButtonElement, {
   date: Date;
   isSelected: boolean;
-  report?: DayReport;
+  hasReport: boolean;
   isToday: boolean;
   isWeekend: boolean;
   onClick: () => void;
-}>(function DateCell({
-  date,
-  isSelected,
-  report,
-  isToday,
-  isWeekend,
-  onClick,
-}, ref) {
-  const hasReport = !!report;
-
+}>(function DateCell({ date, isSelected, hasReport, isToday, isWeekend, onClick }, ref) {
   return (
     <button
       ref={ref}
       onClick={onClick}
       className={`relative flex flex-col items-center gap-0.5 rounded-md px-3 py-2.5 transition-all duration-150 shrink-0 min-w-[60px] ${
-        isSelected
-          ? "bg-primary text-primary-foreground shadow-sm"
-          : isWeekend
-          ? "text-muted-foreground/60 hover:bg-muted/50"
-          : "hover:bg-muted"
+        isSelected ? "bg-primary text-primary-foreground shadow-sm"
+        : isWeekend ? "text-muted-foreground/60 hover:bg-muted/50"
+        : "hover:bg-muted"
       }`}
       data-testid={`date-cell-${dateKey(date)}`}
     >
       <span className={`text-[11px] font-medium ${isSelected ? "text-primary-foreground/70" : "text-muted-foreground"}`}>
         {DAY_NAMES[date.getDay()]}
       </span>
-      <span className={`text-lg font-semibold tabular-nums`}>
-        {date.getDate()}
-      </span>
-      {/* Status dot */}
+      <span className="text-lg font-semibold tabular-nums">{date.getDate()}</span>
       <div className="flex h-2 items-center justify-center">
         {hasReport && !isSelected && (
           <div className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: "hsl(var(--success))" }} />
@@ -211,73 +133,63 @@ const DateCell = React.forwardRef<HTMLButtonElement, {
   );
 });
 
-/* ─── Report card (when a report exists for the selected date) ─── */
-function ReportCard({ report }: { report: DayReport }) {
+/* ─── Report card ─── */
+function ReportCard({ report, projectId }: { report: ReportOut; projectId: string }) {
+  const submittedAt = report.updated_at
+    ? new Date(report.updated_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
+    : null;
+
   return (
     <div className="rounded-md border bg-card p-5 space-y-4" data-testid="report-card">
-      {/* Title + status */}
       <div className="flex items-start justify-between gap-3">
         <div className="space-y-1">
-          <h3 className="text-sm font-semibold">{report.title}</h3>
-          <p className="text-xs text-muted-foreground">
-            Submitted at {report.time}
-          </p>
+          <h3 className="text-sm font-semibold">Daily Report</h3>
+          {submittedAt && (
+            <p className="text-xs text-muted-foreground flex items-center gap-1">
+              <Clock className="h-3 w-3" /> Submitted at {submittedAt}
+            </p>
+          )}
         </div>
         <Badge
           className="shrink-0 gap-1 text-xs font-medium"
-          style={{
-            backgroundColor: "hsl(var(--success) / 0.1)",
-            color: "hsl(var(--success))",
-            borderColor: "transparent",
-          }}
+          style={{ backgroundColor: "hsl(var(--success) / 0.1)", color: "hsl(var(--success))", borderColor: "transparent" }}
           data-testid="badge-report-status"
         >
           <CheckCircle2 className="h-3 w-3" />
-          Complete
+          {report.status === "complete" ? "Complete" : report.status}
         </Badge>
       </div>
 
-      {/* Stats row */}
       <div className="flex items-center gap-5 text-xs text-muted-foreground">
         <span className="flex items-center gap-1.5">
           <Camera className="h-3.5 w-3.5" />
-          {report.photoCount} photos
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="font-medium">{report.crewSize}</span> crew
+          {report.photo_count} photo{report.photo_count !== 1 ? "s" : ""}
         </span>
       </div>
 
-      {/* Actions */}
       <div className="flex gap-2">
-        <Button size="sm" className="gap-1.5" data-testid="button-view-report">
-          <FileText className="h-3.5 w-3.5" />
-          View Report
+        <Button size="sm" className="gap-1.5" data-testid="button-view-report" asChild>
+          <Link href={`/project/${projectId}/report/new`}>
+            <FileText className="h-3.5 w-3.5" />
+            View Report
+          </Link>
         </Button>
       </div>
     </div>
   );
 }
 
-/* ─── Empty state (no report for selected date) ─── */
-function EmptyDay({ date, isFuture, projectId }: { date: Date; isFuture: boolean; projectId: string }) {
+/* ─── Empty state ─── */
+function EmptyDay({ isFuture, projectId }: { date: Date; isFuture: boolean; projectId: string }) {
   return (
     <div className="flex flex-col items-center gap-4 rounded-md border bg-card py-12 px-6 text-center" data-testid="empty-day">
       <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-        {isFuture ? (
-          <Calendar className="h-5 w-5 text-muted-foreground" />
-        ) : (
-          <FileText className="h-5 w-5 text-muted-foreground" />
-        )}
+        {isFuture ? <Calendar className="h-5 w-5 text-muted-foreground" /> : <FileText className="h-5 w-5 text-muted-foreground" />}
       </div>
       <div>
-        <p className="text-sm font-medium">
-          {isFuture ? "Upcoming" : "No report for this day"}
-        </p>
+        <p className="text-sm font-medium">{isFuture ? "Upcoming" : "No report for this day"}</p>
         <p className="mt-1 text-xs text-muted-foreground">
-          {isFuture
-            ? "This date hasn't arrived yet."
-            : "Create a report to document what happened on site."}
+          {isFuture ? "This date hasn't arrived yet." : "Create a report to document what happened on site."}
         </p>
       </div>
       {!isFuture && (
@@ -297,57 +209,60 @@ export default function Project() {
   const { id: projectId = "" } = useParams<{ id: string }>();
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-
-  // Find today's index in the dates array, or default to last date with a report
-  const todayIdx = ALL_DATES.findIndex((d) => dateKey(d) === dateKey(today));
-  const initialIdx = todayIdx >= 0 ? todayIdx : ALL_DATES.length - 1;
-
-  const [selectedIdx, setSelectedIdx] = useState(initialIdx);
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  const selectedDate = ALL_DATES[selectedIdx];
-  const selectedKey = dateKey(selectedDate);
-  const report = MOCK_REPORTS[selectedKey];
   const todayKey = dateKey(today);
-  const isToday = selectedKey === todayKey;
-  const isFuture = selectedKey > todayKey;
 
+  const { data: project, isLoading: loadingProject } = useQuery<ProjectOut>({
+    queryKey: [`/api/projects/${projectId}`],
+    enabled: !!projectId,
+  });
+
+  const { data: reports = [] } = useQuery<ReportOut[]>({
+    queryKey: [`/api/projects/${projectId}/reports`],
+    enabled: !!projectId,
+  });
+
+  // Build date range from project start → today + 14 days
+  const allDates = generateDateRange(project?.start_date ?? null);
+
+  // Index reports by date key for O(1) lookup
+  const reportsByDate = Object.fromEntries(reports.map((r) => [r.report_date, r]));
+
+  // Default selected date to today (or last date in range)
+  const todayIdx = allDates.findIndex((d) => dateKey(d) === todayKey);
+  const initialIdx = todayIdx >= 0 ? todayIdx : allDates.length - 1;
+  const [selectedIdx, setSelectedIdx] = useState(initialIdx);
+
+  // Re-sync when dates load
+  useEffect(() => {
+    const idx = allDates.findIndex((d) => dateKey(d) === todayKey);
+    if (idx >= 0) setSelectedIdx(idx);
+  }, [allDates.length]);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
   const isFirstRender = useRef(true);
   const cellRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
-  // Scroll timeline to center the selected date
   useEffect(() => {
     const el = cellRefs.current[selectedIdx];
     if (!el) return;
-
     const doScroll = () => {
-      el.scrollIntoView({
-        inline: "center",
-        block: "nearest",
-        behavior: isFirstRender.current ? "instant" : "smooth",
-      });
+      el.scrollIntoView({ inline: "center", block: "nearest", behavior: isFirstRender.current ? "instant" : "smooth" });
       isFirstRender.current = false;
     };
-
-    if (isFirstRender.current) {
-      requestAnimationFrame(() => requestAnimationFrame(doScroll));
-    } else {
-      doScroll();
-    }
+    isFirstRender.current ? requestAnimationFrame(() => requestAnimationFrame(doScroll)) : doScroll();
   }, [selectedIdx]);
 
-  const scrollTimeline = (direction: "left" | "right") => {
-    if (scrollRef.current) {
-      const amount = 300;
-      scrollRef.current.scrollBy({
-        left: direction === "left" ? -amount : amount,
-        behavior: "smooth",
-      });
-    }
+  const scrollTimeline = (dir: "left" | "right") => {
+    scrollRef.current?.scrollBy({ left: dir === "left" ? -300 : 300, behavior: "smooth" });
   };
 
-  // Count reports
-  const totalReports = Object.keys(MOCK_REPORTS).length;
+  const selectedDate = allDates[selectedIdx] ?? today;
+  const selectedKey = dateKey(selectedDate);
+  const report = reportsByDate[selectedKey];
+  const isToday = selectedKey === todayKey;
+  const isFuture = selectedKey > todayKey;
+
+  const startDate = project?.start_date ? new Date(project.start_date + "T00:00:00") : null;
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -357,85 +272,70 @@ export default function Project() {
         {/* Back + project name */}
         <div className="mb-6">
           <Link href="/">
-            <button
-              className="mb-3 flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-              data-testid="button-back"
-            >
+            <button className="mb-3 flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground" data-testid="button-back">
               <ArrowLeft className="h-4 w-4" />
               Back to Projects
             </button>
           </Link>
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="font-display text-xl font-bold tracking-tight" data-testid="heading-project-name">
-                Smith Residence Remodel
-              </h1>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                ABC Construction &middot; {totalReports} reports &middot; Started {MONTH_NAMES[new Date(PROJECT_START).getMonth()]} {new Date(PROJECT_START).getDate()}, {new Date(PROJECT_START).getFullYear()}
-              </p>
+              {loadingProject ? (
+                <>
+                  <Skeleton className="h-6 w-48 mb-1" />
+                  <Skeleton className="h-4 w-32" />
+                </>
+              ) : (
+                <>
+                  <h1 className="font-display text-xl font-bold tracking-tight" data-testid="heading-project-name">
+                    {project?.name ?? "Project"}
+                  </h1>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {project?.client && <>{project.client} &middot; </>}
+                    {reports.length} report{reports.length !== 1 ? "s" : ""}
+                    {startDate && <> &middot; Started {MONTH_NAMES[startDate.getMonth()]} {startDate.getDate()}, {startDate.getFullYear()}</>}
+                  </p>
+                </>
+              )}
             </div>
           </div>
         </div>
 
         {/* Timeline */}
         <div className="mb-6 rounded-md border bg-card p-3" data-testid="timeline-container">
-          {/* Month label + arrows */}
           <div className="mb-2 flex items-center justify-between px-1">
             <span className="text-xs font-medium text-muted-foreground">
               {MONTH_NAMES[selectedDate.getMonth()]} {selectedDate.getFullYear()}
             </span>
             <div className="flex gap-1">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                onClick={() => scrollTimeline("left")}
-                data-testid="button-scroll-left"
-              >
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => scrollTimeline("left")} data-testid="button-scroll-left">
                 <ChevronLeft className="h-4 w-4" />
               </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                onClick={() => scrollTimeline("right")}
-                data-testid="button-scroll-right"
-              >
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => scrollTimeline("right")} data-testid="button-scroll-right">
                 <ChevronRight className="h-4 w-4" />
               </Button>
             </div>
           </div>
 
-          {/* Scrollable date strip */}
-          <div
-            ref={scrollRef}
-            className="flex gap-1 overflow-x-auto pb-1 scrollbar-hide"
-            style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
-            data-testid="timeline-scroll"
-          >
-            {/* Spacer so first dates can be centered */}
+          <div ref={scrollRef} className="flex gap-1 overflow-x-auto pb-1 scrollbar-hide" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }} data-testid="timeline-scroll">
             <div className="shrink-0" style={{ width: "calc(50% - 30px)" }} />
-            {ALL_DATES.map((d, idx) => {
+            {allDates.map((d, idx) => {
               const key = dateKey(d);
-              const isWeekend = d.getDay() === 0 || d.getDay() === 6;
               return (
                 <DateCell
                   key={key}
                   ref={(el) => { cellRefs.current[idx] = el; }}
                   date={d}
                   isSelected={idx === selectedIdx}
-                  report={MOCK_REPORTS[key]}
+                  hasReport={!!reportsByDate[key]}
                   isToday={key === todayKey}
-                  isWeekend={isWeekend}
+                  isWeekend={d.getDay() === 0 || d.getDay() === 6}
                   onClick={() => setSelectedIdx(idx)}
                 />
               );
             })}
-            {/* Spacer so last dates can be centered */}
             <div className="shrink-0" style={{ width: "calc(50% - 30px)" }} />
           </div>
 
-          {/* Legend */}
           <div className="mt-2 flex items-center gap-4 px-1 text-[11px] text-muted-foreground">
             <span className="flex items-center gap-1.5">
               <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ backgroundColor: "hsl(var(--success))" }} />
@@ -452,15 +352,12 @@ export default function Project() {
         <div className="mb-4">
           <h2 className="text-sm font-semibold" data-testid="heading-selected-date">
             {formatFullDate(selectedDate)}
-            {isToday && (
-              <span className="ml-2 text-xs font-normal text-muted-foreground">(Today)</span>
-            )}
+            {isToday && <span className="ml-2 text-xs font-normal text-muted-foreground">(Today)</span>}
           </h2>
         </div>
 
-        {/* Content: report card or empty state */}
         {report ? (
-          <ReportCard report={report} />
+          <ReportCard report={report} projectId={projectId} />
         ) : (
           <EmptyDay date={selectedDate} isFuture={isFuture} projectId={projectId} />
         )}
