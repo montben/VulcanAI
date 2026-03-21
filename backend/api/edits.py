@@ -176,7 +176,9 @@ Analyze the report and suggest improvements. Return JSON with "suggestions" and 
         else:
             raise HTTPException(500, f"Unsupported provider: {config.PROVIDER}")
 
-        result = json.loads(result_text)
+        from backend.pipeline.agents import _parse_json_response
+
+        result = _parse_json_response(result_text)
         suggestions = result.get("suggestions", [])
         revised = result.get("revised_report", body.report_json)
 
