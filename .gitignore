@@ -9,3 +9,7 @@ output/*.pdf
 node_modules/
 uploads/
 .claude/
+
+# Vite build output — rebuild locally with: cd sitescribe-ui && npm run build
+frontend/assets/
+frontend/index.html
