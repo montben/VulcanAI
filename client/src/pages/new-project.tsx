@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { VulcanLogo } from "@/components/VulcanLogo";
 import { useTheme } from "@/components/ThemeProvider";
 import { PerplexityAttribution } from "@/components/PerplexityAttribution";
@@ -92,36 +92,21 @@ function WorkerTag({
 }
 
 /* ─── Photo upload ─── */
-function PhotoUpload({ onUploaded }: { onUploaded: (url: string) => void }) {
+function PhotoUpload() {
   const [preview, setPreview] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const handleFile = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = (ev) => setPreview(ev.target?.result as string);
-    reader.readAsDataURL(file);
-
-    const fd = new FormData();
-    fd.append("file", file);
-    fetch("http://localhost:8000/api/uploads/image", { method: "POST", body: fd })
-      .then((r) => r.json())
-      .then((data) => onUploaded(data.url));
-  };
 
   return (
     <div
       className="flex flex-col items-center gap-3"
       data-testid="photo-upload-section"
     >
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
-      />
       <button
-        onClick={() => inputRef.current?.click()}
+        onClick={() => {
+          // Mock: set a placeholder preview
+          setPreview(
+            "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='%23ddd'/%3E%3C/svg%3E"
+          );
+        }}
         className={`group relative flex h-40 w-40 items-center justify-center overflow-hidden rounded-md border-2 border-dashed transition-all duration-200 ${
           preview
             ? "border-primary/30 bg-card"
@@ -130,7 +115,9 @@ function PhotoUpload({ onUploaded }: { onUploaded: (url: string) => void }) {
         data-testid="button-upload-photo"
       >
         {preview ? (
-          <img src={preview} className="h-full w-full object-cover" alt="Cover photo" />
+          <div className="flex h-full w-full items-center justify-center bg-muted">
+            <Building2 className="h-12 w-12 text-muted-foreground/40" />
+          </div>
         ) : (
           <div className="flex flex-col items-center gap-2 text-muted-foreground group-hover:text-primary transition-colors">
             <Camera className="h-6 w-6" />
@@ -192,12 +179,56 @@ export default function NewProject() {
   const [client, setClient] = useState("");
   const [projectType, setProjectType] = useState("");
   const [location, setLocation] = useState("");
+  const [locationLat, setLocationLat] = useState<number | null>(null);
+  const [locationLng, setLocationLng] = useState<number | null>(null);
+  const [addressQuery, setAddressQuery] = useState("");
+  const [addressSuggestions, setAddressSuggestions] = useState<Array<{ display_name: string; lat: string; lon: string }>>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const addressRef = useRef<HTMLDivElement>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Debounced Nominatim search
+  const searchAddress = useCallback((query: string) => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (query.length < 3) {
+      setAddressSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+    setIsSearching(true);
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&countrycodes=us&limit=5&addressdetails=1`,
+          { headers: { "Accept-Language": "en" } }
+        );
+        const data = await res.json();
+        setAddressSuggestions(data);
+        setShowSuggestions(data.length > 0);
+      } catch {
+        setAddressSuggestions([]);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 350);
+  }, []);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (addressRef.current && !addressRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
   const [startDate, setStartDate] = useState("");
   const [timeline, setTimeline] = useState("");
   const [siteManager, setSiteManager] = useState("");
   const [workerInput, setWorkerInput] = useState("");
   const [workers, setWorkers] = useState<string[]>([]);
-  const [coverPhotoUrl, setCoverPhotoUrl] = useState<string | null>(null);
 
   const createProjectMutation = useMutation({
     mutationFn: async () => {
@@ -206,10 +237,11 @@ export default function NewProject() {
         name: projectName,
         client: client || null,
         location_address: location || null,
+        location_lat: locationLat,
+        location_lng: locationLng,
         project_type: projectType || null,
         start_date: startDate || null,
         expected_end_date: computeEndDate(startDate, timeline),
-        profile_image_url: coverPhotoUrl || null,
       });
       const project = await res.json();
 
@@ -302,7 +334,7 @@ export default function NewProject() {
             <h2 className="text-sm font-semibold">Project Details</h2>
 
             {/* Photo upload centered */}
-            <PhotoUpload onUploaded={(url) => setCoverPhotoUrl(url)} />
+            <PhotoUpload />
 
             {/* Project name */}
             <FormField label="Project Name" icon={Briefcase} testId="field-project-name">
@@ -347,14 +379,62 @@ export default function NewProject() {
           <div className="rounded-md border bg-card p-5 space-y-5" data-testid="section-location-timeline">
             <h2 className="text-sm font-semibold">Location & Timeline</h2>
 
-            {/* Location */}
+            {/* Location with autocomplete */}
             <FormField label="Location" icon={MapPin} testId="field-location">
-              <Input
-                placeholder="e.g. 1234 Oak St, Detroit, MI 48201"
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                data-testid="input-location"
-              />
+              <div className="relative" ref={addressRef}>
+                <div className="relative">
+                  <Input
+                    placeholder="Start typing an address..."
+                    value={addressQuery}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setAddressQuery(val);
+                      setLocation(val);
+                      setLocationLat(null);
+                      setLocationLng(null);
+                      searchAddress(val);
+                    }}
+                    onFocus={() => {
+                      if (addressSuggestions.length > 0) setShowSuggestions(true);
+                    }}
+                    data-testid="input-location"
+                    autoComplete="off"
+                  />
+                  {isSearching && (
+                    <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" />
+                  )}
+                </div>
+                {showSuggestions && addressSuggestions.length > 0 && (
+                  <div
+                    className="absolute z-50 mt-1 w-full rounded-md border bg-popover shadow-md"
+                    data-testid="address-suggestions"
+                  >
+                    {addressSuggestions.map((s, i) => (
+                      <button
+                        key={`${s.lat}-${s.lon}-${i}`}
+                        type="button"
+                        className="flex w-full items-start gap-2 px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent first:rounded-t-md last:rounded-b-md"
+                        onClick={() => {
+                          setAddressQuery(s.display_name);
+                          setLocation(s.display_name);
+                          setLocationLat(parseFloat(s.lat));
+                          setLocationLng(parseFloat(s.lon));
+                          setShowSuggestions(false);
+                        }}
+                        data-testid={`address-option-${i}`}
+                      >
+                        <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <span className="line-clamp-2">{s.display_name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {locationLat !== null && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Coordinates: {locationLat.toFixed(4)}, {locationLng?.toFixed(4)}
+                </p>
+              )}
             </FormField>
 
             {/* Start date + timeline side by side */}
