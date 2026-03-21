@@ -25,8 +25,11 @@ import {
   Clock,
   Building2,
   X,
+  Loader2,
 } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useMutation } from "@tanstack/react-query";
 
 /* ─── Navbar ─── */
 function Navbar() {
@@ -150,8 +153,28 @@ function FormField({
   );
 }
 
+/* ─── Timeline → end date helper ─── */
+function computeEndDate(startDate: string, timeline: string): string | null {
+  if (!startDate || !timeline) return null;
+  const start = new Date(startDate + "T00:00:00");
+  const daysMap: Record<string, number> = {
+    "1-2-weeks": 14,
+    "3-4-weeks": 28,
+    "1-3-months": 90,
+    "3-6-months": 180,
+    "6-12-months": 365,
+    "12-plus-months": 547,
+  };
+  const days = daysMap[timeline];
+  if (!days) return null;
+  const end = new Date(start);
+  end.setDate(end.getDate() + days);
+  return end.toISOString().split("T")[0];
+}
+
 /* ─── New Project Page ─── */
 export default function NewProject() {
+  const [, navigate] = useLocation();
   const [projectName, setProjectName] = useState("");
   const [client, setClient] = useState("");
   const [projectType, setProjectType] = useState("");
@@ -161,6 +184,53 @@ export default function NewProject() {
   const [siteManager, setSiteManager] = useState("");
   const [workerInput, setWorkerInput] = useState("");
   const [workers, setWorkers] = useState<string[]>([]);
+
+  const createProjectMutation = useMutation({
+    mutationFn: async () => {
+      // 1. Create the project
+      const res = await apiRequest("POST", "/api/projects", {
+        name: projectName,
+        client: client || null,
+        location_address: location || null,
+        project_type: projectType || null,
+        start_date: startDate || null,
+        expected_end_date: computeEndDate(startDate, timeline),
+      });
+      const project = await res.json();
+
+      // 2. Create site manager as a member and assign to project
+      if (siteManager.trim()) {
+        const memberRes = await apiRequest("POST", "/api/members", {
+          name: siteManager.trim(),
+          role: "Site Manager",
+        });
+        const member = await memberRes.json();
+        await apiRequest("POST", `/api/projects/${project.id}/members`, {
+          member_id: member.id,
+          role: "site_manager",
+        });
+      }
+
+      // 3. Create workers as members and assign to project
+      for (const workerName of workers) {
+        const memberRes = await apiRequest("POST", "/api/members", {
+          name: workerName,
+          role: "Worker",
+        });
+        const member = await memberRes.json();
+        await apiRequest("POST", `/api/projects/${project.id}/members`, {
+          member_id: member.id,
+          role: "worker",
+        });
+      }
+
+      return project;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+      navigate("/");
+    },
+  });
 
   const addWorker = () => {
     const trimmed = workerInput.trim();
@@ -180,6 +250,8 @@ export default function NewProject() {
       addWorker();
     }
   };
+
+  const canSubmit = projectName.trim().length > 0 && !createProjectMutation.isPending;
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -345,6 +417,15 @@ export default function NewProject() {
             </FormField>
           </div>
 
+          {/* Error message */}
+          {createProjectMutation.isError && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+              {createProjectMutation.error instanceof Error
+                ? createProjectMutation.error.message
+                : "Failed to create project. Is the backend running?"}
+            </div>
+          )}
+
           {/* ── Actions ── */}
           <div className="flex items-center justify-end gap-3 pb-4" data-testid="form-actions">
             <Link href="/">
@@ -358,9 +439,14 @@ export default function NewProject() {
             </Link>
             <Button
               className="gap-2 px-6"
+              disabled={!canSubmit}
+              onClick={() => createProjectMutation.mutate()}
               data-testid="button-create-project"
             >
-              Create Project
+              {createProjectMutation.isPending && (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              )}
+              {createProjectMutation.isPending ? "Creating..." : "Create Project"}
             </Button>
           </div>
         </div>
