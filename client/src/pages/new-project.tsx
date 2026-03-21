@@ -452,11 +452,6 @@ export default function NewProject() {
                   </div>
                 )}
               </div>
-              {locationLat !== null && (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Coordinates: {locationLat.toFixed(4)}, {locationLng?.toFixed(4)}
-                </p>
-              )}
             </FormField>
 
             {/* Start date + timeline side by side */}
