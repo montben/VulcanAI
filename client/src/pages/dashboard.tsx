@@ -10,10 +10,18 @@ import {
   FolderOpen,
   Clock,
   Camera,
+  MoreVertical,
+  Trash2,
 } from "lucide-react";
 import { Link } from "wouter";
-import { useQuery } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 /* ─── Types matching backend ProjectOut schema ─── */
 interface ProjectMember {
@@ -110,6 +118,15 @@ function ProjectCard({
 }) {
   const imageUrl = project.profile_image_url || getFallbackImage(index);
 
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("DELETE", `/api/projects/${project.id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+    },
+  });
+
   // Format the start date nicely
   const dateLabel = project.start_date
     ? new Date(project.start_date + "T00:00:00").toLocaleDateString("en-US", {
@@ -135,9 +152,39 @@ function ProjectCard({
         {/* Gradient overlay */}
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
 
-        {/* Project type badge — top right */}
+        {/* Menu — top right */}
+        <div className="absolute top-2 right-2 z-10">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                onClick={(e) => e.preventDefault()}
+                className="flex h-7 w-7 items-center justify-center rounded-full bg-black/40 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/60 backdrop-blur-sm"
+                data-testid={`menu-project-${project.id}`}
+              >
+                <MoreVertical className="h-4 w-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-36">
+              <DropdownMenuItem
+                className="gap-2 text-destructive focus:text-destructive"
+                onClick={(e) => {
+                  e.preventDefault();
+                  if (confirm(`Delete "${project.name}"? This cannot be undone.`)) {
+                    deleteMutation.mutate();
+                  }
+                }}
+                data-testid={`delete-project-${project.id}`}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+        {/* Project type badge */}
         {project.project_type && (
-          <div className="absolute top-2.5 right-2.5 rounded-sm bg-black/50 px-1.5 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm">
+          <div className="absolute top-2.5 left-2.5 rounded-sm bg-black/50 px-1.5 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm">
             {project.project_type}
           </div>
         )}
