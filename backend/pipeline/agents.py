@@ -4,6 +4,7 @@ import json
 import logging
 import time
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -19,6 +20,39 @@ _PROMPTS_DIR = Path(__file__).parent / "prompts"
 _TRANSCRIPT_PROMPT = (_PROMPTS_DIR / "transcript_analysis.txt").read_text()
 _SYNTHESIS_V2_PROMPT = (_PROMPTS_DIR / "report_synthesis_v2.txt").read_text()
 _REVIEW_PROMPT = (_PROMPTS_DIR / "report_review.txt").read_text()
+
+_WORK_STATUS_ALIASES = {
+    "complete": "completed",
+    "completed": "completed",
+    "done": "completed",
+    "finished": "completed",
+    "in_progress": "in_progress",
+    "in progress": "in_progress",
+    "inprogress": "in_progress",
+    "ongoing": "in_progress",
+    "started": "started",
+    "starting": "started",
+    "beginning": "started",
+}
+
+_SEVERITY_ALIASES = {
+    "low": "low",
+    "minor": "low",
+    "medium": "medium",
+    "moderate": "medium",
+    "high": "high",
+    "severe": "high",
+    "critical": "high",
+}
+
+_PRIORITY_ALIASES = {
+    "low": "low",
+    "medium": "medium",
+    "med": "medium",
+    "normal": "medium",
+    "high": "high",
+    "urgent": "high",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +78,160 @@ def _parse_json_response(text: str) -> dict:
             stripped = stripped[brace:]
 
     return json.loads(stripped)
+
+
+def _string(value: Any, default: str = "") -> str:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        value = value.strip()
+        return value or default
+    text = str(value).strip()
+    return text or default
+
+
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [_string(item) for item in value if _string(item)]
+    if isinstance(value, str):
+        parts = [part.strip() for part in value.split(",")]
+        return [part for part in parts if part]
+    text = _string(value)
+    return [text] if text else []
+
+
+def _choice(value: Any, aliases: dict[str, str], default: str) -> str:
+    normalized = _string(value).lower().replace("-", "_")
+    return aliases.get(normalized, default)
+
+
+def _normalize_photo_descriptions(raw_items: Any, fallback_items: list[dict]) -> list[dict]:
+    normalized: list[dict] = []
+    raw_list = raw_items if isinstance(raw_items, list) else []
+    max_items = max(len(raw_list), len(fallback_items))
+
+    for index in range(max_items):
+        raw = raw_list[index] if index < len(raw_list) and isinstance(raw_list[index], dict) else {}
+        fallback = fallback_items[index] if index < len(fallback_items) and isinstance(fallback_items[index], dict) else {}
+        normalized.append(
+            {
+                "filename": _string(raw.get("filename") or fallback.get("filename"), f"photo_{index + 1}.jpg"),
+                "caption": _string(raw.get("caption") or fallback.get("caption"), ""),
+                "ai_description": _string(
+                    raw.get("ai_description") or raw.get("description") or fallback.get("ai_description"),
+                    "",
+                ),
+            }
+        )
+
+    return normalized
+
+
+def _normalize_structured_report_data(
+    data: dict,
+    *,
+    metadata: dict,
+    weather: dict,
+    photo_descriptions: list[dict],
+) -> dict:
+    raw_metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    normalized: dict[str, Any] = {
+        "metadata": {
+            "project_name": _string(raw_metadata.get("project_name") or metadata.get("project_name"), "Untitled Project"),
+            "report_date": _string(raw_metadata.get("report_date") or metadata.get("report_date"), ""),
+            "location": _string(raw_metadata.get("location") or metadata.get("location"), ""),
+            "weather": _string(
+                raw_metadata.get("weather")
+                or metadata.get("weather")
+                or weather.get("summary")
+                or "Weather data unavailable"
+            ),
+            "prepared_by": _string(raw_metadata.get("prepared_by") or metadata.get("prepared_by"), "SiteScribe AI"),
+        },
+        "summary": _string(data.get("summary"), ""),
+        "progress_update": _string(data.get("progress_update"), ""),
+        "additional_notes": _string(data.get("additional_notes"), ""),
+    }
+
+    work_completed: list[dict[str, str]] = []
+    for item in data.get("work_completed", []) if isinstance(data.get("work_completed"), list) else []:
+        record = item if isinstance(item, dict) else {"task": item}
+        task = _string(record.get("task") or record.get("description") or record.get("work") or record.get("item"))
+        if not task:
+            continue
+        work_completed.append(
+            {
+                "area": _string(record.get("area") or record.get("location") or record.get("zone"), "General"),
+                "task": task,
+                "status": _choice(record.get("status") or record.get("progress") or record.get("state"), _WORK_STATUS_ALIASES, "completed"),
+            }
+        )
+    normalized["work_completed"] = work_completed
+
+    issues_delays: list[dict[str, str]] = []
+    for item in data.get("issues_delays", []) if isinstance(data.get("issues_delays"), list) else []:
+        record = item if isinstance(item, dict) else {"issue": item}
+        issue = _string(record.get("issue") or record.get("title") or record.get("problem"))
+        if not issue:
+            continue
+        issues_delays.append(
+            {
+                "issue": issue,
+                "impact": _string(record.get("impact") or record.get("details") or record.get("note"), "Impact not specified"),
+                "severity": _choice(record.get("severity") or record.get("priority"), _SEVERITY_ALIASES, "medium"),
+            }
+        )
+    normalized["issues_delays"] = issues_delays
+
+    safety_notes: list[dict[str, str]] = []
+    for item in data.get("safety_notes", []) if isinstance(data.get("safety_notes"), list) else []:
+        record = item if isinstance(item, dict) else {"observation": item}
+        observation = _string(record.get("observation") or record.get("note") or record.get("hazard"))
+        if not observation:
+            continue
+        safety_notes.append(
+            {
+                "observation": observation,
+                "action_required": _string(
+                    record.get("action_required") or record.get("action") or record.get("mitigation"),
+                    "Follow up on site.",
+                ),
+            }
+        )
+    normalized["safety_notes"] = safety_notes
+
+    next_steps: list[dict[str, str]] = []
+    for item in data.get("next_steps", []) if isinstance(data.get("next_steps"), list) else []:
+        record = item if isinstance(item, dict) else {"task": item}
+        task = _string(record.get("task") or record.get("step") or record.get("description"))
+        if not task:
+            continue
+        next_steps.append(
+            {
+                "task": task,
+                "priority": _choice(record.get("priority"), _PRIORITY_ALIASES, "medium"),
+            }
+        )
+    normalized["next_steps"] = next_steps
+
+    raw_resources = data.get("resources_mentioned") if isinstance(data.get("resources_mentioned"), dict) else {}
+    normalized["resources_mentioned"] = {
+        "crew_summary": _string(
+            raw_resources.get("crew_summary") or raw_resources.get("crew") or raw_resources.get("personnel"),
+            "Crew not specified.",
+        ),
+        "equipment": _string_list(raw_resources.get("equipment")),
+        "materials": _string_list(raw_resources.get("materials")),
+    }
+
+    normalized["photo_descriptions"] = _normalize_photo_descriptions(
+        data.get("photo_descriptions"),
+        photo_descriptions,
+    )
+
+    return normalized
 
 
 def _llm_call(system_prompt: str, user_message: str, *, max_tokens: int = 4096, temperature: float = 0.3) -> dict:
@@ -273,8 +461,14 @@ def synthesize_structured_report(
 
     logger.info("Synthesizing structured report for %s", metadata.get("project_name", "unknown"))
     data = _llm_call(_SYNTHESIS_V2_PROMPT, user_message, max_tokens=8192)
+    normalized_data = _normalize_structured_report_data(
+        data,
+        metadata=metadata,
+        weather=weather,
+        photo_descriptions=photo_descriptions,
+    )
 
-    return StructuredDailyReport(**data)
+    return StructuredDailyReport(**normalized_data)
 
 
 # ---------------------------------------------------------------------------
