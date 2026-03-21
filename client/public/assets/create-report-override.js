@@ -323,7 +323,7 @@ function renderCallStep() {
         <p class="text-xs text-muted-foreground">${state.callConnecting ? "Connecting to voice agent..." : "Voice intake in progress"}</p>
       </div>
 
-      <div class="w-full max-w-lg space-y-3 overflow-y-auto rounded-md border bg-card p-4" style="max-height: 340px">
+      <div id="call-transcript" class="w-full max-w-lg space-y-3 overflow-y-auto rounded-md border bg-card p-4" style="max-height: 340px">
         ${renderTranscript()}
       </div>
 
@@ -456,6 +456,10 @@ function render() {
   if (state.step === "done") inner = renderDoneStep();
   overlay.innerHTML = renderShell(inner);
   bindEvents(overlay);
+  if (state.step === "call") {
+    const transcript = document.getElementById("call-transcript");
+    if (transcript) transcript.scrollTop = transcript.scrollHeight;
+  }
 }
 
 function addSelectedFiles(fileList) {
