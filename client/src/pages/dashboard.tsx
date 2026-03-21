@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, BACKEND_URL } from "@/lib/queryClient";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -117,7 +117,8 @@ function ProjectCard({
   project: Project;
   index: number;
 }) {
-  const imageUrl = project.profile_image_url || getFallbackImage(index);
+  const rawImageUrl = project.profile_image_url || getFallbackImage(index);
+  const imageUrl = rawImageUrl?.startsWith("/uploads/") ? `${BACKEND_URL}${rawImageUrl}` : rawImageUrl;
 
   const deleteMutation = useMutation({
     mutationFn: async () => {

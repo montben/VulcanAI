@@ -1,7 +1,7 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
 // In dev, the backend runs on :8000. Set VITE_API_BASE to override.
-const BACKEND_URL = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+export const BACKEND_URL = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
