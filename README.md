@@ -39,9 +39,9 @@ python3 -m uvicorn backend.app:app --host 0.0.0.0 --port 8000
 
 Open `http://localhost:8000`.
 
-### 3. Frontend (for development)
+### 3. Frontend
 
-The built frontend is already in `frontend/` and served by the backend. To rebuild after making source changes:
+The `frontend/` build output is not committed to git. You must build locally:
 
 ```bash
 cd client
@@ -49,7 +49,7 @@ npm install       # first time only
 npm run build     # compiles client/src/ → frontend/
 ```
 
-The backend serves the updated bundle automatically — no separate frontend server needed.
+**Run `npm run build` after every `git pull`** to pick up any source changes from teammates. The backend serves the built files automatically — no separate frontend server needed.
 
 ## Environment Variables
 
