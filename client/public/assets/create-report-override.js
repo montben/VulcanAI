@@ -1,3 +1,4 @@
+const BACKEND_URL = "http://localhost:8000";
 const CREATE_REPORT_ROUTE = /^#\/project\/([^/]+)\/report\/new$/;
 const PROJECT_ROUTE = /^#\/project\/([^/]+)$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -34,7 +35,8 @@ function formatDateLabel(dateValue) {
 }
 
 async function request(path, options = {}) {
-  const response = await fetch(path, options);
+  const url = path.startsWith("/") ? `${BACKEND_URL}${path}` : path;
+  const response = await fetch(url, options);
   if (response.ok) {
     return response;
   }
@@ -624,7 +626,8 @@ async function beginVoiceIntakeFlow() {
 
 function buildStreamUrl(streamPath) {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}${streamPath}`;
+  const host = new URL(BACKEND_URL).host;
+  return `${protocol}//${host}${streamPath}`;
 }
 
 async function resolveCallSession() {
@@ -954,7 +957,7 @@ function startProgressStream() {
     state.eventSource.close();
   }
 
-  const source = new EventSource(`/api/projects/${state.projectId}/reports/${state.reportId}/progress`);
+  const source = new EventSource(`${BACKEND_URL}/api/projects/${state.projectId}/reports/${state.reportId}/progress`);
   state.eventSource = source;
 
   source.onmessage = async (event) => {

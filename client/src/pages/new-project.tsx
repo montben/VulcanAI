@@ -28,7 +28,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, BACKEND_URL } from "@/lib/queryClient";
 import { useMutation } from "@tanstack/react-query";
 
 /* ─── Navbar ─── */
@@ -92,32 +92,43 @@ function WorkerTag({
 }
 
 /* ─── Photo upload ─── */
-function PhotoUpload() {
+function PhotoUpload({ onUploaded }: { onUploaded: (url: string) => void }) {
   const [preview, setPreview] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  async function handleFile(file: File) {
+    const reader = new FileReader();
+    reader.onload = (e) => setPreview(e.target?.result as string);
+    reader.readAsDataURL(file);
+
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await fetch(`${BACKEND_URL}/api/uploads/image`, { method: "POST", body: formData });
+    if (res.ok) {
+      const data = await res.json();
+      onUploaded(data.url);
+    }
+  }
 
   return (
-    <div
-      className="flex flex-col items-center gap-3"
-      data-testid="photo-upload-section"
-    >
+    <div className="flex flex-col items-center gap-3" data-testid="photo-upload-section">
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => { if (e.target.files?.[0]) handleFile(e.target.files[0]); }}
+      />
       <button
-        onClick={() => {
-          // Mock: set a placeholder preview
-          setPreview(
-            "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='%23ddd'/%3E%3C/svg%3E"
-          );
-        }}
+        type="button"
+        onClick={() => inputRef.current?.click()}
         className={`group relative flex h-40 w-40 items-center justify-center overflow-hidden rounded-md border-2 border-dashed transition-all duration-200 ${
-          preview
-            ? "border-primary/30 bg-card"
-            : "border-border hover:border-primary/40 hover:bg-card"
+          preview ? "border-primary/30 bg-card" : "border-border hover:border-primary/40 hover:bg-card"
         }`}
         data-testid="button-upload-photo"
       >
         {preview ? (
-          <div className="flex h-full w-full items-center justify-center bg-muted">
-            <Building2 className="h-12 w-12 text-muted-foreground/40" />
-          </div>
+          <img src={preview} alt="Cover" className="h-full w-full object-cover" />
         ) : (
           <div className="flex flex-col items-center gap-2 text-muted-foreground group-hover:text-primary transition-colors">
             <Camera className="h-6 w-6" />
@@ -245,6 +256,7 @@ export default function NewProject() {
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
+  const [coverPhotoUrl, setCoverPhotoUrl] = useState<string | null>(null);
   const [startDate, setStartDate] = useState("");
   const [timeline, setTimeline] = useState("");
   const [siteManager, setSiteManager] = useState("");
@@ -263,6 +275,7 @@ export default function NewProject() {
         project_type: projectType || null,
         start_date: startDate || null,
         expected_end_date: computeEndDate(startDate, timeline),
+        profile_image_url: coverPhotoUrl || null,
       });
       const project = await res.json();
 
@@ -355,7 +368,7 @@ export default function NewProject() {
             <h2 className="text-sm font-semibold">Project Details</h2>
 
             {/* Photo upload centered */}
-            <PhotoUpload />
+            <PhotoUpload onUploaded={(url) => setCoverPhotoUrl(url)} />
 
             {/* Project name */}
             <FormField label="Project Name" icon={Briefcase} testId="field-project-name">

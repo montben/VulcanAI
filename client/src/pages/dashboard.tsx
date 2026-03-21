@@ -43,16 +43,9 @@ interface Project {
   members: ProjectMember[];
 }
 
-/* ─── Fallback images when no profile_image_url is set ─── */
-// These images live in frontend/assets/ and are served directly
-const FALLBACK_IMAGES = [
-  "/assets/project-1-K5HTfrPo.jpg",
-  "/assets/project-2-DOz_31jE.jpg",
-  "/assets/project-3-CG2mWqkb.jpg",
-];
-
-function getFallbackImage(index: number): string {
-  return FALLBACK_IMAGES[index % FALLBACK_IMAGES.length];
+// No fallback images — show a muted placeholder background when no cover photo is set
+function getFallbackImage(_index: number): string | null {
+  return null;
 }
 
 /* ─── Navbar ─── */
@@ -145,11 +138,15 @@ function ProjectCard({
         data-testid={`card-project-${project.id}`}
       >
         {/* Full-bleed image background */}
-        <img
-          src={imageUrl}
-          alt={project.name}
-          className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.04]"
-        />
+        {imageUrl ? (
+          <img
+            src={imageUrl}
+            alt={project.name}
+            className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.04]"
+          />
+        ) : (
+          <div className="absolute inset-0 bg-muted" />
+        )}
 
         {/* Gradient overlay */}
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
