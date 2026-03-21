@@ -16,8 +16,10 @@ import {
   CheckCircle2,
   Download,
   FileText,
+  Loader2,
 } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useParams } from "wouter";
+import { apiRequest } from "@/lib/queryClient";
 
 type Step = "photos" | "call" | "generating" | "done";
 
@@ -49,24 +51,13 @@ function Navbar() {
   );
 }
 
-/* ─── Mock photo type ─── */
-interface MockPhoto {
+/* ─── Photo type ─── */
+interface PhotoEntry {
   id: string;
-  name: string;
-  color: string;
+  file: File;
+  previewUrl: string;
   caption: string;
 }
-
-const PLACEHOLDER_COLORS = [
-  "hsl(25, 60%, 45%)",
-  "hsl(200, 40%, 40%)",
-  "hsl(145, 35%, 38%)",
-  "hsl(35, 55%, 42%)",
-  "hsl(280, 30%, 40%)",
-  "hsl(10, 50%, 42%)",
-  "hsl(180, 35%, 38%)",
-  "hsl(50, 50%, 40%)",
-];
 
 function generateId() {
   return Math.random().toString(36).substring(2, 9);
@@ -126,19 +117,18 @@ function PhotoThumb({
   onRemove,
   onCaptionChange,
 }: {
-  photo: MockPhoto;
+  photo: PhotoEntry;
   onRemove: () => void;
   onCaptionChange: (caption: string) => void;
 }) {
   return (
     <div className="group flex flex-col gap-1.5" data-testid={`photo-thumb-${photo.id}`}>
       <div className="relative aspect-square overflow-hidden rounded-md">
-        <div
-          className="flex h-full w-full items-center justify-center"
-          style={{ backgroundColor: photo.color }}
-        >
-          <Camera className="h-5 w-5 text-white/50" />
-        </div>
+        <img
+          src={photo.previewUrl}
+          alt={photo.file.name}
+          className="h-full w-full object-cover"
+        />
         <button
           onClick={onRemove}
           className="absolute top-1.5 right-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/50 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/70"
@@ -147,7 +137,7 @@ function PhotoThumb({
           <X className="h-3.5 w-3.5" />
         </button>
         <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent px-2 pb-1.5 pt-4">
-          <p className="truncate text-[11px] font-medium text-white">{photo.name}</p>
+          <p className="truncate text-[11px] font-medium text-white">{photo.file.name}</p>
         </div>
       </div>
       <input
@@ -167,28 +157,41 @@ function PhotosStep({
   photos,
   setPhotos,
   onNext,
+  isUploading,
+  uploadProgress,
 }: {
-  photos: MockPhoto[];
-  setPhotos: React.Dispatch<React.SetStateAction<MockPhoto[]>>;
+  photos: PhotoEntry[];
+  setPhotos: React.Dispatch<React.SetStateAction<PhotoEntry[]>>;
   onNext: () => void;
+  isUploading: boolean;
+  uploadProgress: string;
 }) {
   const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const addPhotos = useCallback(
-    (count: number) => {
-      const newPhotos: MockPhoto[] = Array.from({ length: count }, (_, i) => ({
-        id: generateId(),
-        name: `IMG_${String(photos.length + i + 1).padStart(4, "0")}.jpg`,
-        color: PLACEHOLDER_COLORS[(photos.length + i) % PLACEHOLDER_COLORS.length],
-        caption: "",
-      }));
+  const addFiles = useCallback(
+    (files: FileList | File[]) => {
+      const newPhotos: PhotoEntry[] = Array.from(files)
+        .filter((f) => f.type.startsWith("image/"))
+        .map((file) => ({
+          id: generateId(),
+          file,
+          previewUrl: URL.createObjectURL(file),
+          caption: "",
+        }));
       setPhotos((prev) => [...prev, ...newPhotos]);
     },
-    [photos.length, setPhotos]
+    [setPhotos]
   );
 
   const removePhoto = useCallback(
-    (id: string) => setPhotos((prev) => prev.filter((p) => p.id !== id)),
+    (id: string) => {
+      setPhotos((prev) => {
+        const photo = prev.find((p) => p.id === id);
+        if (photo) URL.revokeObjectURL(photo.previewUrl);
+        return prev.filter((p) => p.id !== id);
+      });
+    },
     [setPhotos]
   );
 
@@ -210,11 +213,25 @@ function PhotosStep({
           )}
         </div>
 
+        {/* Hidden file input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            if (e.target.files) addFiles(e.target.files);
+            e.target.value = "";
+          }}
+          data-testid="file-input"
+        />
+
         <div
           onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
           onDragLeave={() => setIsDragging(false)}
-          onDrop={(e) => { e.preventDefault(); setIsDragging(false); addPhotos(3); }}
-          onClick={() => addPhotos(1)}
+          onDrop={(e) => { e.preventDefault(); setIsDragging(false); if (e.dataTransfer.files) addFiles(e.dataTransfer.files); }}
+          onClick={() => fileInputRef.current?.click()}
           className={`group flex cursor-pointer flex-col items-center gap-3 rounded-md border-2 border-dashed px-6 py-10 transition-all duration-200 ${
             isDragging
               ? "border-primary bg-primary/5"
@@ -252,7 +269,7 @@ function PhotosStep({
               />
             ))}
             <button
-              onClick={() => addPhotos(1)}
+              onClick={() => fileInputRef.current?.click()}
               className="flex aspect-square items-center justify-center rounded-md border-2 border-dashed border-border text-muted-foreground transition-all hover:border-primary/40 hover:text-primary hover:bg-card"
               data-testid="button-add-more-photos"
             >
@@ -264,18 +281,27 @@ function PhotosStep({
 
       <div className="mt-8 flex items-center justify-between border-t pt-6">
         <Link href="/project/p1">
-          <Button variant="ghost" className="text-muted-foreground" data-testid="button-cancel">
+          <Button variant="ghost" className="text-muted-foreground" disabled={isUploading} data-testid="button-cancel">
             Cancel
           </Button>
         </Link>
         <Button
           className="gap-2 px-6"
-          disabled={photos.length === 0}
+          disabled={photos.length === 0 || isUploading}
           onClick={onNext}
           data-testid="button-next"
         >
-          Next
-          <ArrowRight className="h-4 w-4" />
+          {isUploading ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              {uploadProgress}
+            </>
+          ) : (
+            <>
+              Next
+              <ArrowRight className="h-4 w-4" />
+            </>
+          )}
         </Button>
       </div>
     </>
@@ -579,12 +605,53 @@ function DoneStep() {
 
 /* ─── Create Report Page ─── */
 export default function CreateReport() {
-  const [step, setStep] = useState<Step>("photos");
-  const [photos, setPhotos] = useState<MockPhoto[]>([]);
+  const params = useParams<{ id: string }>();
+  const projectId = params.id || "p1";
 
-  const handleNextToCall = useCallback(() => setStep("call"), []);
+  const [step, setStep] = useState<Step>("photos");
+  const [photos, setPhotos] = useState<PhotoEntry[]>([]);
+  const [reportId, setReportId] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState("");
+
+  const handleNextToCall = useCallback(async () => {
+    setIsUploading(true);
+    try {
+      // 1. Create the daily report record
+      const today = new Date().toISOString().split("T")[0];
+      const reportRes = await apiRequest("POST", `/api/projects/${projectId}/reports`, {
+        report_date: today,
+      });
+      const report = await reportRes.json();
+      setReportId(report.id);
+
+      // 2. Upload each photo with its caption
+      for (let i = 0; i < photos.length; i++) {
+        setUploadProgress(`Uploading ${i + 1}/${photos.length}...`);
+        const formData = new FormData();
+        formData.append("photo", photos[i].file);
+        formData.append("caption", photos[i].caption);
+        await apiRequest("POST", `/api/projects/${projectId}/reports/${report.id}/photos`, formData);
+      }
+
+      setIsUploading(false);
+      setStep("call");
+    } catch (err) {
+      setIsUploading(false);
+      console.error("Upload failed:", err);
+      alert(err instanceof Error ? err.message : "Upload failed. Is the backend running?");
+    }
+  }, [photos, projectId]);
+
   const handleCallFinish = useCallback(() => setStep("generating"), []);
   const handleGeneratingDone = useCallback(() => setStep("done"), []);
+
+  const todayFormatted = new Date().toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -594,7 +661,7 @@ export default function CreateReport() {
         {/* Header — only show on photos step */}
         {step === "photos" && (
           <div className="mb-6">
-            <Link href="/project/p1">
+            <Link href={`/project/${projectId}`}>
               <button
                 className="mb-3 flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
                 data-testid="button-back"
@@ -607,13 +674,19 @@ export default function CreateReport() {
               Create Report
             </h1>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Smith Residence Remodel &middot; Saturday, March 21, 2026
+              {todayFormatted}
             </p>
           </div>
         )}
 
         {step === "photos" && (
-          <PhotosStep photos={photos} setPhotos={setPhotos} onNext={handleNextToCall} />
+          <PhotosStep
+            photos={photos}
+            setPhotos={setPhotos}
+            onNext={handleNextToCall}
+            isUploading={isUploading}
+            uploadProgress={uploadProgress}
+          />
         )}
         {step === "call" && <CallStep onFinish={handleCallFinish} />}
         {step === "generating" && <GeneratingStep onDone={handleGeneratingDone} />}
