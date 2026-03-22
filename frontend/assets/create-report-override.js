@@ -744,6 +744,7 @@ async function startCall() {
         state.callConnecting = false;
         startCallTimer();
 
+        // Capture raw PCM audio for Deepgram Voice Agent API
         const audioContext = new (window.AudioContext || window.webkitAudioContext)({
           sampleRate: AGENT_SAMPLE_RATE,
         });
