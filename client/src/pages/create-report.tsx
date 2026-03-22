@@ -270,13 +270,6 @@ function PhotosStep({
                 onCaptionChange={(caption) => updateCaption(photo.id, caption)}
               />
             ))}
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="flex aspect-square items-center justify-center rounded-md border-2 border-dashed border-border text-muted-foreground transition-all hover:border-primary/40 hover:text-primary hover:bg-card"
-              data-testid="button-add-more-photos"
-            >
-              <ImagePlus className="h-5 w-5" />
-            </button>
           </div>
         )}
       </div>
