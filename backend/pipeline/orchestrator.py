@@ -3,7 +3,10 @@
 Synchronous by design. Run in a background thread from the API layer.
 """
 
+import json
 import logging
+import os
+import subprocess
 from queue import Queue
 from uuid import UUID
 
@@ -234,7 +237,23 @@ def run_report_pipeline(
         transition_status(report, "generated")
         db.commit()
 
-        # ── 10. Emit completion ──────────────────────────────────────────
+        # ── 10. Generate PDF via Node pipeline ───────────────────────────
+        _emit(progress_queue, {"stage": "generating_pdf", "message": "Generating PDF report"})
+
+        voice_payload = {
+            "report": report_data,
+            "pdf_context": {"report_id": str(report.id)},
+        }
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        subprocess.run(
+            ["node", "photo-test/generateReport.js"],
+            input=json.dumps(voice_payload),
+            cwd=repo_root,
+            text=True,
+            check=True,
+        )
+
+        # ── 11. Emit completion ──────────────────────────────────────────
         _emit(progress_queue, {
             "stage": "complete",
             "message": "Report generated successfully",

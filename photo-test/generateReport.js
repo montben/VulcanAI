@@ -2,20 +2,24 @@
 
 /**
  * generateReport.js
- * End-to-end SiteScribe AI report pipeline runner.
+ * End-to-end SiteScribe AI report pipeline.
  *
- * Usage (from photo-test/):
- *   node generateReport.js
+ * Voice AI calls this with its payload + a db connection.
+ * This file handles everything: adapt → fetch photos → enrich → build → PDF.
  *
- * Reads:  voicePayload.json, photoRows.json
- * Writes: output/report.html, output/report.pdf
+ * Usage:
+ *   const { generateReport } = require('./photo-test/generateReport');
+ *   await generateReport({ voicePayload, db });
+ *
+ * Standalone test (reads voicePayload.json, uses mock photos):
+ *   node photo-test/generateReport.js
  */
 
-const fs   = require('fs');
 const path = require('path');
+const { Pool } = require('pg');
 
 const { adaptVoicePayload } = require('./voiceAdapter');
-const { enrichPhoto }       = require('./photoEnrichment');
+const { mapReportPhotos }   = require('./photoAdapter');
 const { buildFinalReport }  = require('./reportBuilder');
 const { buildHtml }         = require('./htmlTemplate');
 const { generatePdf }       = require('./pdfGenerator');
@@ -24,94 +28,98 @@ const { generatePdf }       = require('./pdfGenerator');
 // Helpers
 // ---------------------------------------------------------------------------
 
-function loadJson(filePath) {
-  const abs = path.resolve(__dirname, filePath);
-  if (!fs.existsSync(abs)) {
-    throw new Error(`Required input file not found: ${abs}`);
-  }
-  let raw;
-  try {
-    raw = fs.readFileSync(abs, 'utf8');
-  } catch (err) {
-    throw new Error(`Failed to read ${abs}: ${err.message}`);
-  }
-  try {
-    return JSON.parse(raw);
-  } catch (err) {
-    throw new Error(`Invalid JSON in ${abs}: ${err.message}`);
-  }
-}
-
 function log(msg) {
   console.log(`[generateReport] ${msg}`);
 }
 
 // ---------------------------------------------------------------------------
-// Main
+// Core pipeline
 // ---------------------------------------------------------------------------
 
-async function main() {
-  // 1. Load voice payload
-  log('Loading voice payload from voicePayload.json...');
-  const voicePayload = loadJson('./voicePayload.json');
+/**
+ * Full report generation pipeline.
+ *
+ * @param {object}  options
+ * @param {object}  options.voicePayload  - voice pipeline output JSON
+ * @param {object} [options.db]           - pg database client/pool (optional for local testing)
+ * @param {string} [options.outputPdf]    - override output PDF path
+ * @param {string} [options.outputHtml]   - override output HTML path
+ * @returns {Promise<{ htmlPath: string, pdfPath: string }>}
+ */
+async function generateReport({ voicePayload, db, outputPdf, outputHtml } = {}) {
+  if (voicePayload == null || typeof voicePayload !== 'object') {
+    throw new Error('generateReport: voicePayload must be an object');
+  }
 
-  // 2. Adapt into metadata + aiData
+  // 1. Adapt voice payload → metadata + aiData
   log('Adapting voice payload...');
   const { metadata, aiData } = adaptVoicePayload(voicePayload);
 
-  // 3. Load photo rows
-  log('Loading photo rows from photoRows.json...');
-  const photoRows = loadJson('./photoRows.json');
-  if (!Array.isArray(photoRows)) {
-    throw new Error('photoRows.json must be a JSON array');
+  // 2. Fetch raw photo rows from DB
+  const reportId = voicePayload?.pdf_context?.report_id;
+  let enrichedPhotos = [];
+
+  if (db && reportId) {
+    log(`Fetching photos for report ${reportId}...`);
+    const result = await db.query(
+      'SELECT * FROM report_photos WHERE report_id = $1 ORDER BY sort_order ASC',
+      [reportId]
+    );
+    const rows = result.rows;
+    log(`Mapping ${rows.length} photo(s)...`);
+    enrichedPhotos = mapReportPhotos(rows);
+  } else {
+    log('No db or report_id provided — skipping photos.');
   }
 
-  // 4. Enrich photos
-  log(`Enriching ${photoRows.length} photo(s)...`);
-  const enrichedPhotos = await Promise.all(
-    photoRows.map(async (row) => {
-      const image_path        = typeof row.file_path === 'string'   ? row.file_path   : '';
-      const original_caption  = typeof row.caption === 'string'     ? row.caption
-                              : typeof row.original_filename === 'string' ? row.original_filename
-                              : '';
-      try {
-        const result = await enrichPhoto({ image_path, original_caption });
-        log(`  enriched: ${image_path || '(no path)'}`);
-        return result;
-      } catch (err) {
-        console.warn(`[generateReport] WARNING — enrichment failed for "${image_path}": ${err.message}`);
-        return {
-          image_path,
-          original_caption,
-          clean_caption: '',
-          observations: [],
-          category: 'general',
-        };
-      }
-    })
-  );
-
-  // 5. Build normalized report object
+  // 3. Build normalized report object
   log('Building report object...');
   const report = buildFinalReport(aiData, metadata, enrichedPhotos);
 
-  // 6. Build HTML
+  // 4. Build HTML
   log('Building HTML...');
   const html = buildHtml(report);
 
-  // 7. Generate PDF
-  const outputPdf  = path.resolve(__dirname, './output/report.pdf');
-  const outputHtml = path.resolve(__dirname, './output/report.html');
+  // 5. Generate PDF
+  const pdfPath  = outputPdf  || path.resolve(__dirname, './output/report.pdf');
+  const htmlPath = outputHtml || path.resolve(__dirname, './output/report.html');
   log('Generating PDF...');
-  const result = await generatePdf(html, outputPdf, outputHtml);
+  const result = await generatePdf(html, pdfPath, htmlPath);
 
-  // 8. Done
   log('Done.');
   log(`  HTML → ${result.htmlPath}`);
   log(`  PDF  → ${result.pdfPath}`);
+
+  return result;
 }
 
-main().catch((err) => {
-  console.error(`[generateReport] FATAL: ${err.message}`);
-  process.exit(1);
-});
+module.exports = { generateReport };
+
+// ---------------------------------------------------------------------------
+// Standalone runner — reads voicePayload JSON from stdin (piped from Python)
+//   echo '{"report":{...}}' | node photo-test/generateReport.js
+// ---------------------------------------------------------------------------
+
+if (require.main === module) {
+  let raw = '';
+  process.stdin.on('data', chunk => raw += chunk);
+  process.stdin.on('end', async () => {
+    let voicePayload;
+    try {
+      voicePayload = JSON.parse(raw);
+    } catch (err) {
+      console.error(`[generateReport] FATAL: invalid JSON on stdin — ${err.message}`);
+      process.exit(1);
+    }
+
+    const db = new Pool({ connectionString: process.env.DATABASE_URL });
+    try {
+      await generateReport({ voicePayload, db });
+    } catch (err) {
+      console.error(`[generateReport] FATAL: ${err.message}`);
+      process.exit(1);
+    } finally {
+      await db.end();
+    }
+  });
+}
