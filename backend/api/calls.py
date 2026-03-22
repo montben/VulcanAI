@@ -190,7 +190,7 @@ def _build_agent_settings(model: str, groq_api_key: str) -> dict[str, Any]:
             },
         },
         "agent": {
-            "listen": {"provider": listen_provider, "endpointing": _AGENT_ENDPOINTING_MS},
+            "listen": {"provider": listen_provider},
             "think": _build_agent_think_config(model, groq_api_key),
             "speak": {
                 "provider": {"type": "deepgram", "model": _AGENT_TTS_MODEL},
