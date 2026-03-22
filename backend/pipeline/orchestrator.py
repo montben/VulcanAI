@@ -253,6 +253,12 @@ def run_report_pipeline(
             check=True,
         )
 
+        # Save pdf_path on the GeneratedReport row
+        pdf_path = os.path.join(repo_root, "photo-test", "output", "report.pdf")
+        if os.path.exists(pdf_path):
+            generated.pdf_path = pdf_path
+            db.commit()
+
         # ── 11. Emit completion ──────────────────────────────────────────
         _emit(progress_queue, {
             "stage": "complete",

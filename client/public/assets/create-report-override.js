@@ -372,8 +372,7 @@ function renderDoneStep() {
   const reportJson = state.reportData?.latest_generated_report?.report_json || {};
   const metadata = reportJson.metadata || {};
   const photoCount = Array.isArray(state.reportData?.photos) ? state.reportData.photos.length : 0;
-  const workItems = Array.isArray(reportJson.work_completed) ? reportJson.work_completed.length : 0;
-  const safetyNotes = Array.isArray(reportJson.safety_notes) ? reportJson.safety_notes.length : 0;
+  const pageCount = state.reportData?.pdf_page_count ?? null;
 
   return `
     <div class="flex flex-col items-center gap-6 pt-12 pb-8">
@@ -382,7 +381,7 @@ function renderDoneStep() {
       </div>
 
       <div class="text-center">
-        <h2 class="font-display text-lg font-bold">Report JSON Ready</h2>
+        <h2 class="font-display text-lg font-bold">Report Ready</h2>
         <p class="mt-1 text-sm text-muted-foreground">
           ${escapeHtml(metadata.project_name || projectName())} · ${escapeHtml(metadata.report_date || activeReportDateLabel())}
         </p>
@@ -393,24 +392,18 @@ function renderDoneStep() {
           <span class="text-muted-foreground">Photos analyzed</span>
           <span class="font-medium">${photoCount}</span>
         </div>
+        ${pageCount !== null ? `
         <div class="flex items-center justify-between text-xs">
-          <span class="text-muted-foreground">Work items documented</span>
-          <span class="font-medium">${workItems}</span>
-        </div>
-        <div class="flex items-center justify-between text-xs">
-          <span class="text-muted-foreground">Safety observations</span>
-          <span class="font-medium">${safetyNotes} flagged</span>
-        </div>
+          <span class="text-muted-foreground">Pages created</span>
+          <span class="font-medium">${pageCount}</span>
+        </div>` : ''}
       </div>
 
       <div class="flex flex-col items-center gap-3 sm:flex-row">
         <button type="button" class="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-download-pdf ${state.finalizingPdf ? "disabled" : ""}>
           ${state.finalizingPdf ? "Generating PDF..." : "Download PDF"}
         </button>
-        <button type="button" class="inline-flex items-center rounded-md border px-4 py-2 text-sm" data-download-json>
-          Download JSON
-        </button>
-        <button type="button" class="inline-flex items-center rounded-md border px-4 py-2 text-sm" data-back-project>
+<button type="button" class="inline-flex items-center rounded-md border px-4 py-2 text-sm" data-back-project>
           Back to Project
         </button>
       </div>

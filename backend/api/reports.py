@@ -18,6 +18,16 @@ from fastapi.responses import FileResponse
 from starlette.responses import StreamingResponse
 
 from backend.database import get_db  # load_dotenv runs here
+
+
+def _pdf_page_count(pdf_path: str | None) -> int | None:
+    if not pdf_path or not os.path.exists(pdf_path):
+        return None
+    try:
+        from pypdf import PdfReader
+        return len(PdfReader(pdf_path).pages)
+    except Exception:
+        return None
 from backend.models.db import (
     CallSession,
     CallTranscript,
@@ -89,6 +99,7 @@ class ReportOut(BaseModel):
     photo_count: int = 0
     transcript_count: int = 0
     has_generated_report: bool = False
+    pdf_page_count: int | None = None
 
     model_config = {"from_attributes": True}
 
@@ -129,6 +140,7 @@ class ReportDetail(BaseModel):
     latest_generated_report: GeneratedReportOut | None = None
     active_call_session: CallSessionOut | None = None
     pdf_url: str | None = None
+    pdf_page_count: int | None = None
     photos: list[PhotoOut] = Field(default_factory=list)
     transcripts: list[TranscriptOut] = Field(default_factory=list)
     generated_reports: list[GeneratedReportOut] = Field(default_factory=list)
@@ -153,6 +165,11 @@ def list_reports(
         .offset(offset)
         .all()
     )
+    def _latest_pdf_path(r: DailyReportRecord) -> str | None:
+        if not r.generated_reports:
+            return None
+        return max(r.generated_reports, key=lambda g: g.created_at).pdf_path
+
     return [
         ReportOut(
             id=str(r.id), project_id=str(r.project_id), report_date=r.report_date,
@@ -161,6 +178,7 @@ def list_reports(
             error_message=r.error_message, updated_at=r.updated_at,
             photo_count=len(r.photos), transcript_count=len(r.transcripts),
             has_generated_report=len(r.generated_reports) > 0,
+            pdf_page_count=_pdf_page_count(_latest_pdf_path(r)),
         )
         for r in reports
     ]
@@ -244,10 +262,12 @@ def get_report(project_id: str, report_id: str, db: Session = Depends(get_db)):
 
     # Build PDF URL from latest generated report
     pdf_url = None
+    latest_pdf_path = None
     if report.generated_reports:
         latest = max(report.generated_reports, key=lambda g: g.created_at)
         if latest.pdf_path:
             pdf_url = f"/api/projects/{project_id}/reports/{report_id}/pdf"
+            latest_pdf_path = latest.pdf_path
 
     return ReportDetail(
         id=str(report.id), project_id=str(report.project_id),
@@ -258,6 +278,7 @@ def get_report(project_id: str, report_id: str, db: Session = Depends(get_db)):
         latest_generated_report=latest_gen,
         active_call_session=active_session,
         pdf_url=pdf_url,
+        pdf_page_count=_pdf_page_count(latest_pdf_path),
         photos=[
             PhotoOut(id=str(p.id), file_path=p.file_path, original_filename=p.original_filename,
                      caption=p.caption, ai_description=p.ai_description, sort_order=p.sort_order)

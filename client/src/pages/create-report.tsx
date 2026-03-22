@@ -542,7 +542,7 @@ function GeneratingStep({ onDone }: { onDone: () => void }) {
 }
 
 /* ─── Step 4: Done ─── */
-function DoneStep({ projectId }: { projectId: string }) {
+function DoneStep({ projectId, photoCount }: { projectId: string; photoCount: number }) {
   return (
     <div className="step-enter flex flex-col items-center gap-6 pt-12 pb-8">
       <div
@@ -565,19 +565,7 @@ function DoneStep({ projectId }: { projectId: string }) {
       <div className="w-full max-w-md rounded-md border bg-card p-4 space-y-3" data-testid="report-summary">
         <div className="flex items-center justify-between text-xs">
           <span className="text-muted-foreground">Photos analyzed</span>
-          <span className="font-medium">5</span>
-        </div>
-        <div className="flex items-center justify-between text-xs">
-          <span className="text-muted-foreground">Work items documented</span>
-          <span className="font-medium">4</span>
-        </div>
-        <div className="flex items-center justify-between text-xs">
-          <span className="text-muted-foreground">Safety observations</span>
-          <span className="font-medium">1 flagged</span>
-        </div>
-        <div className="flex items-center justify-between text-xs">
-          <span className="text-muted-foreground">Crew size</span>
-          <span className="font-medium">6 workers</span>
+          <span className="font-medium">{photoCount}</span>
         </div>
       </div>
 
@@ -687,7 +675,7 @@ export default function CreateReport() {
         )}
         {step === "call" && <CallStep onFinish={handleCallFinish} />}
         {step === "generating" && <GeneratingStep onDone={handleGeneratingDone} />}
-        {step === "done" && <DoneStep projectId={projectId} />}
+        {step === "done" && <DoneStep projectId={projectId} photoCount={photos.length} />}
       </main>
 
       <PerplexityAttribution />
