@@ -26,8 +26,6 @@
  * }
  */
 
-const VALID_CATEGORIES = new Set(['progress', 'safety', 'issue', 'general']);
-
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -36,22 +34,6 @@ function str(value) {
   return typeof value === 'string' && value.length > 0 ? value : '';
 }
 
-function parseObservations(value) {
-  if (Array.isArray(value)) {
-    return value.filter(v => typeof v === 'string');
-  }
-  if (typeof value === 'string') {
-    try {
-      const parsed = JSON.parse(value);
-      if (Array.isArray(parsed)) return parsed.filter(v => typeof v === 'string');
-    } catch (_) { /* not valid JSON — fall through */ }
-  }
-  return [];
-}
-
-function resolveCategory(value) {
-  return VALID_CATEGORIES.has(value) ? value : 'general';
-}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -75,12 +57,14 @@ function mapReportPhotoRow(row) {
     };
   }
 
+  const caption = str(row.caption) || str(row.original_caption);
+
   return {
-    image_path:       str(row.image_path),
-    original_caption: str(row.original_caption),
-    clean_caption:    str(row.clean_caption) || str(row.ai_description),
-    observations:     parseObservations(row.observations),
-    category:         resolveCategory(row.category),
+    image_path:       str(row.file_path) || str(row.image_path),
+    original_caption: caption,
+    clean_caption:    caption,
+    observations:     [],
+    category:         'general',
   };
 }
 
