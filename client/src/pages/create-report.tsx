@@ -30,12 +30,12 @@ function Navbar() {
   return (
     <nav className="sticky top-0 z-50 w-full border-b bg-background/80 backdrop-blur-sm" data-testid="navbar">
       <div className="mx-auto flex h-14 max-w-3xl items-center justify-between px-4">
-        <div className="flex items-center gap-2.5" data-testid="logo">
+        <a href="/" className="flex items-center gap-2.5" data-testid="logo">
           <VulcanLogo size={24} className="text-primary" />
           <span className="font-display text-base font-bold tracking-tight">
             Vulcan<span className="ml-1 text-xs font-medium text-muted-foreground">AI</span>
           </span>
-        </div>
+        </a>
         <Button
           variant="ghost"
           size="icon"
