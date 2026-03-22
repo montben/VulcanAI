@@ -631,5 +631,5 @@ def download_report_pdf(
     return FileResponse(
         latest.pdf_path,
         media_type="application/pdf",
-        filename=os.path.basename(latest.pdf_path),
+        headers={"Content-Disposition": "inline"},
     )

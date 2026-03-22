@@ -17,10 +17,12 @@ import {
   CheckCircle2,
   Calendar,
   Clock,
+  Download,
+  Trash2,
 } from "lucide-react";
 import { Link, useParams } from "wouter";
-import { useQuery } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest, BACKEND_URL } from "@/lib/queryClient";
 
 /* ─── Types ─── */
 interface ProjectOut {
@@ -134,7 +136,9 @@ const DateCell = React.forwardRef<HTMLButtonElement, {
 });
 
 /* ─── Report card ─── */
-function ReportCard({ report, projectId }: { report: ReportOut; projectId: string }) {
+function ReportCard({ report, projectId, onDelete }: { report: ReportOut; projectId: string; onDelete: () => void }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
   const submittedAt = report.updated_at
     ? new Date(report.updated_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
     : null;
@@ -167,13 +171,41 @@ function ReportCard({ report, projectId }: { report: ReportOut; projectId: strin
         </span>
       </div>
 
-      <div className="flex gap-2">
-        <Button size="sm" className="gap-1.5" data-testid="button-view-report" asChild>
-          <Link href={`/project/${projectId}/report/new`}>
-            <FileText className="h-3.5 w-3.5" />
-            View Report
-          </Link>
-        </Button>
+      {report.has_generated_report && (
+        <div className="rounded-md overflow-hidden border" data-testid="pdf-viewer">
+          <iframe
+            src={`${BACKEND_URL}/api/projects/${projectId}/reports/${report.id}/pdf#toolbar=0&navpanes=0&view=FitH`}
+            className="w-full"
+            style={{ height: "600px" }}
+            title="Daily Report PDF"
+          />
+        </div>
+      )}
+
+      <div className="flex gap-2 justify-between items-center">
+        <div className="flex gap-2">
+          {report.has_generated_report && (
+            <Button size="sm" variant="outline" className="gap-1.5" asChild data-testid="button-download-pdf">
+              <a href={`${BACKEND_URL}/api/projects/${projectId}/reports/${report.id}/pdf`} download>
+                <Download className="h-3.5 w-3.5" />
+                Download PDF
+              </a>
+            </Button>
+          )}
+        </div>
+        <div className="flex gap-2">
+          {confirmDelete ? (
+            <>
+              <Button size="sm" variant="outline" onClick={() => setConfirmDelete(false)}>Cancel</Button>
+              <Button size="sm" variant="destructive" onClick={onDelete}>Confirm Delete</Button>
+            </>
+          ) : (
+            <Button size="sm" variant="ghost" className="gap-1.5 text-muted-foreground hover:text-destructive" onClick={() => setConfirmDelete(true)} data-testid="button-delete-report">
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -219,6 +251,14 @@ export default function Project() {
   const { data: reports = [] } = useQuery<ReportOut[]>({
     queryKey: [`/api/projects/${projectId}/reports`],
     enabled: !!projectId,
+    staleTime: 0,
+  });
+
+  const qc = useQueryClient();
+  const deleteReport = useMutation({
+    mutationFn: (reportId: string) =>
+      apiRequest("DELETE", `/api/projects/${projectId}/reports/${reportId}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: [`/api/projects/${projectId}/reports`] }),
   });
 
   // Build date range from project start → today + 14 days
@@ -357,7 +397,7 @@ export default function Project() {
         </div>
 
         {report ? (
-          <ReportCard report={report} projectId={projectId} />
+          <ReportCard report={report} projectId={projectId} onDelete={() => deleteReport.mutate(report.id)} />
         ) : (
           <EmptyDay date={selectedDate} isFuture={isFuture} projectId={projectId} />
         )}

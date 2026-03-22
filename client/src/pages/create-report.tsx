@@ -620,7 +620,8 @@ export default function CreateReport() {
     setIsUploading(true);
     try {
       // 1. Create the daily report record
-      const today = new Date().toISOString().split("T")[0];
+      const d = new Date();
+      const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
       const reportRes = await apiRequest("POST", `/api/projects/${projectId}/reports`, {
         report_date: today,
       });
