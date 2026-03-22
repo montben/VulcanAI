@@ -105,26 +105,9 @@ function renderResources(resources) {
 // Photo section
 // ---------------------------------------------------------------------------
 
-const BADGE_LABELS = {
-  progress: 'Progress',
-  safety:   'Safety',
-  issue:    'Issue',
-  general:  'General',
-};
-
-function renderBadge(category) {
-  const cat   = BADGE_LABELS[category] ? category : 'general';
-  const label = BADGE_LABELS[cat];
-  return `<span class="badge badge-${escapeHtml(cat)}">${escapeHtml(label)}</span>`;
-}
-
 function renderPhotoCard(photo) {
-  const caption      = typeof photo.clean_caption === 'string' ? photo.clean_caption.trim() : '';
-  const observations = Array.isArray(photo.observations)
-    ? photo.observations.filter(o => typeof o === 'string' && o.trim())
-    : [];
-  const imagePath    = typeof photo.image_path === 'string' ? photo.image_path.trim() : '';
-  const category     = photo.category || 'general';
+  const caption   = typeof photo.clean_caption === 'string' ? photo.clean_caption.trim() : '';
+  const imagePath = typeof photo.image_path === 'string' ? photo.image_path.trim() : '';
 
   const { src: imgSrc, exists: imgExists } = toImageSrc(imagePath);
   const imgTag = imgSrc
@@ -134,17 +117,11 @@ function renderPhotoCard(photo) {
     ? `<div class="img-placeholder"${imgSrc ? ' style="display:none"' : ''}>Image unavailable</div>`
     : '';
 
-  const observationsHtml = observations.length > 0
-    ? `<ul class="observations">${observations.map(o => `<li>${escapeHtml(o)}</li>`).join('')}</ul>`
-    : '';
-
   return `
     <div class="photo-card">
       ${imgTag}${placeholder}
       <div class="photo-meta">
-        ${renderBadge(category)}
         ${caption ? `<p class="caption">${escapeHtml(caption)}</p>` : ''}
-        ${observationsHtml}
       </div>
     </div>`;
 }
