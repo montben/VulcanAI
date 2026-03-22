@@ -1,14 +1,18 @@
-"""Call session lifecycle endpoints for live voice recording."""
+"""Call session lifecycle endpoints using Deepgram Voice Agent API."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import os
+import struct
 import threading
 import uuid
 from datetime import datetime, timezone
+from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -19,39 +23,53 @@ from backend.models.db import CallSession, DailyReportRecord
 from backend.utils.status import transition_status
 
 logger = logging.getLogger(__name__)
-_CALL_TTS_MODEL = os.getenv("DEEPGRAM_TTS_MODEL", "aura-2-thalia-en")
-_CALL_UTTERANCE_END_MS = os.getenv("DEEPGRAM_UTTERANCE_END_MS", "1800")
 
-_CALL_FALLBACK_PROMPTS = [
-    "Tell me what got done on site today.",
-    "How many people were on site, and which trades were working?",
-    "Did any deliveries, inspections, delays, or blockers come up?",
-    "Were there any safety observations or issues to note?",
-    "What is planned for tomorrow?",
-]
+_AGENT_LISTEN_MODEL = os.getenv("DEEPGRAM_AGENT_LISTEN_MODEL", "nova-2")
+_AGENT_LISTEN_VERSION = os.getenv(
+    "DEEPGRAM_AGENT_LISTEN_VERSION",
+    "v2" if _AGENT_LISTEN_MODEL.startswith("flux") else "v1",
+)
+_AGENT_TTS_MODEL = os.getenv("DEEPGRAM_TTS_MODEL", "aura-2-orpheus-en")
+_AGENT_SAMPLE_RATE = int(os.getenv("DEEPGRAM_AGENT_SAMPLE_RATE", "16000"))
+_AGENT_THINK_TEMPERATURE = float(os.getenv("DEEPGRAM_AGENT_THINK_TEMPERATURE", "0.3"))
+_AGENT_THINK_CONTEXT_LENGTH = os.getenv("DEEPGRAM_AGENT_THINK_CONTEXT_LENGTH", "max")
+_DEEPGRAM_AGENT_WS_URL = os.getenv(
+    "DEEPGRAM_AGENT_WS_URL",
+    "wss://agent.deepgram.com/v1/agent/converse",
+)
+_GROQ_OPENAI_BASE_URL = os.getenv(
+    "GROQ_OPENAI_BASE_URL",
+    "https://api.groq.com/openai/v1/chat/completions",
+)
 
-_CALL_INTERVIEWER_PROMPT = """You are SiteScribe AI, a concise construction daily report intake assistant speaking to a site superintendent.
+_AGENT_THINK_PROMPT = """\
+You are SiteScribe AI, a practical construction colleague doing a quick end-of-day \
+check-in with a site superintendent.
 
-Goal: gather enough information to fill a construction daily report with these categories:
-- work completed
-- crew and trades on site
-- deliveries, inspections, delays, blockers
-- safety observations and corrective actions
-- next steps / tomorrow plan
+Your job is to gather enough detail for the daily report while sounding natural, \
+brief, and useful, never like a form or checklist.
 
-Rules:
-- Ask exactly one short follow-up question at a time.
-- Keep questions conversational and under 20 words.
-- Do not repeat questions already answered.
-- Prioritize missing information over polishing.
-- If you already have enough information for the categories above, set done=true and question to a short closing line.
+You should naturally learn about these topics without naming them explicitly:
+- What work got done today
+- Who was on site (crew, trades, headcount)
+- Any deliveries, inspections, delays, or blockers
+- Safety observations or concerns
+- What's planned for tomorrow
 
-Return ONLY valid JSON:
-{
-  "done": false,
-  "question": "short follow-up question"
-}
+Conversation rules:
+- The greeting already asked the opening question. Do not ask another opener until the superintendent answers.
+- They may cover multiple topics in one answer. Notice that and do not repeat covered ground.
+- After each answer, acknowledge briefly and ask at most one follow-up.
+- Ask follow-ups that build from what they just said instead of hopping category-to-category.
+- If details are still missing, combine them naturally in one question when possible, for example: "Who all was out there, and did anything hold you up?"
+- If their answer is vague or too short, ask one grounded follow-up tied to the last thing they mentioned.
+- Do not turn the call into a checklist of work, crew, logistics, safety, and tomorrow asked one by one.
+- Do not ask empty filler questions like "Anything else?", "That's it?", or "What's next then?" unless you already have the core report details.
+- Keep responses jobsite-appropriate, conversational, and under 24 words.
+- Once you have enough detail for the report, wrap up briefly with something like "Alright, I have what I need. End the call whenever you're ready."
 """
+
+_AGENT_GREETING = "How'd today go out there?"
 
 router = APIRouter(
     prefix="/api/projects/{project_id}/reports/{report_id}/calls",
@@ -79,90 +97,131 @@ def _get_report_for_project(db: Session, project_id: str, report_id: str) -> Dai
     return report
 
 
-_interviewer_client = None
-
-
-def _get_interviewer_client():
-    global _interviewer_client
-    if _interviewer_client is None:
-        from groq import Groq
-        from backend.pipeline import config
-        _interviewer_client = Groq(api_key=config.GROQ_API_KEY)
-    return _interviewer_client
-
-
-_MAX_USER_TURNS = 8
-
-
-def _generate_next_question(conversation: list[dict[str, str]]) -> dict[str, object]:
-    if not conversation:
-        return {"done": False, "question": _CALL_FALLBACK_PROMPTS[0]}
-
-    user_turns = sum(1 for turn in conversation if turn["speaker"] == "user")
-    if user_turns >= _MAX_USER_TURNS:
-        return {"done": True, "question": "That covers everything I need. Thanks!"}
-
-    from backend.pipeline import config
-
-    if config.PROVIDER != "groq" or not config.GROQ_API_KEY:
-        if user_turns < len(_CALL_FALLBACK_PROMPTS):
-            return {"done": False, "question": _CALL_FALLBACK_PROMPTS[user_turns]}
-        return {"done": True, "question": "I have what I need for the report."}
-
-    try:
-        from backend.pipeline.json_utils import parse_json_response
-
-        client = _get_interviewer_client()
-        formatted_conversation = "\n".join(
-            f"{turn['speaker'].capitalize()}: {turn['text']}" for turn in conversation
-        )
-        response = client.chat.completions.create(
-            model=config.SYNTHESIS_MODEL,
-            messages=[
-                {"role": "system", "content": _CALL_INTERVIEWER_PROMPT},
-                {"role": "user", "content": f"Conversation so far:\n{formatted_conversation}"},
-            ],
-            max_tokens=200,
-            temperature=0.2,
-            response_format={"type": "json_object"},
-        )
-        raw_text = response.choices[0].message.content or ""
-        parsed = parse_json_response(raw_text)
-        question = str(parsed.get("question", "")).strip()
-        done = bool(parsed.get("done", False))
-        if not question:
-            raise ValueError("Empty question from Groq")
-        return {"done": done, "question": question}
-    except Exception as exc:
-        logger.warning("Falling back to scripted interviewer prompt: %s", exc)
-        if user_turns < len(_CALL_FALLBACK_PROMPTS):
-            return {"done": False, "question": _CALL_FALLBACK_PROMPTS[user_turns]}
-        return {"done": True, "question": "I have what I need for the report."}
-
-
 def _format_conversation_transcript(conversation: list[dict[str, str]]) -> str:
     return "\n".join(
         f"{turn['speaker'].capitalize()}: {turn['text']}" for turn in conversation if turn.get("text")
     )
 
 
-async def _synthesize_assistant_audio(dg_client, text: str) -> str | None:
-    if not text:
-        return None
+def _make_wav(pcm_data: bytes, sample_rate: int = 16000) -> bytes:
+    """Wrap raw linear16 PCM in a WAV header."""
+    data_size = len(pcm_data)
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF", 36 + data_size, b"WAVE",
+        b"fmt ", 16, 1, 1, sample_rate,
+        sample_rate * 2, 2, 16,
+        b"data", data_size,
+    )
+    return header + pcm_data
 
-    audio_chunks: list[bytes] = []
-    async for chunk in dg_client.speak.v1.audio.generate(
-        text=text,
-        model=_CALL_TTS_MODEL,
-        encoding="mp3",
-    ):
-        if chunk:
-            audio_chunks.append(chunk)
 
-    if not audio_chunks:
-        return None
+def _append_conversation_turn(
+    conversation: list[dict[str, str]],
+    speaker: str,
+    text: str,
+) -> bool:
+    """Append a normalized turn, ignoring blanks and exact consecutive duplicates."""
+    normalized = str(text).strip()
+    if not normalized:
+        return False
 
-    return base64.b64encode(b"".join(audio_chunks)).decode("ascii")
+    if conversation and conversation[-1]["speaker"] == speaker and conversation[-1]["text"] == normalized:
+        return False
+
+    conversation.append({"speaker": speaker, "text": normalized})
+    return True
+
+
+def _normalize_llm_endpoint_url(url: str) -> str:
+    """Return a full LLM endpoint URL for providers that need one.
+
+    Deepgram calls the configured URL directly. Groq's OpenAI-compatible
+    documentation often shows a base URL (`.../openai/v1`) for SDK clients,
+    but Voice Agent needs the full chat completions path.
+    """
+    normalized = url.strip().rstrip("/")
+    parsed = urlparse(normalized)
+    if parsed.netloc == "api.groq.com" and parsed.path == "/openai/v1":
+        return f"{normalized}/chat/completions"
+    return normalized
+
+
+def _build_agent_think_config(model: str, groq_api_key: str) -> dict[str, Any]:
+    if not groq_api_key:
+        raise RuntimeError("GROQ_API_KEY not configured for the Deepgram Voice Agent think stage")
+
+    return {
+        "provider": {
+            "type": "open_ai",
+            "model": model,
+            "temperature": _AGENT_THINK_TEMPERATURE,
+        },
+        "endpoint": {
+            "url": _normalize_llm_endpoint_url(_GROQ_OPENAI_BASE_URL),
+            "headers": {"authorization": f"Bearer {groq_api_key}"},
+        },
+        "prompt": _AGENT_THINK_PROMPT,
+        "context_length": _AGENT_THINK_CONTEXT_LENGTH,
+    }
+
+
+def _build_agent_settings(model: str, groq_api_key: str) -> dict[str, Any]:
+    listen_provider: dict[str, Any] = {
+        "type": "deepgram",
+        "model": _AGENT_LISTEN_MODEL,
+        "version": _AGENT_LISTEN_VERSION,
+    }
+    if not _AGENT_LISTEN_MODEL.startswith("flux"):
+        listen_provider["smart_format"] = True
+
+    return {
+        "type": "Settings",
+        "audio": {
+            "input": {
+                "encoding": "linear16",
+                "sample_rate": _AGENT_SAMPLE_RATE,
+            },
+            "output": {
+                "encoding": "linear16",
+                "sample_rate": _AGENT_SAMPLE_RATE,
+            },
+        },
+        "agent": {
+            "listen": {"provider": listen_provider},
+            "think": _build_agent_think_config(model, groq_api_key),
+            "speak": {
+                "provider": {"type": "deepgram", "model": _AGENT_TTS_MODEL},
+            },
+            "greeting": _AGENT_GREETING,
+        },
+    }
+
+
+async def _await_settings_applied(agent_ws, timeout: float = 10.0) -> list[str | bytes]:
+    """Wait for SettingsApplied and return any messages received before it."""
+    pending_messages: list[str | bytes] = []
+
+    while True:
+        raw_message = await asyncio.wait_for(agent_ws.recv(), timeout=timeout)
+        if isinstance(raw_message, bytes):
+            pending_messages.append(raw_message)
+            continue
+
+        try:
+            payload = json.loads(raw_message)
+        except json.JSONDecodeError:
+            logger.warning("Ignoring non-JSON agent message before settings applied")
+            continue
+
+        event_type = payload.get("type")
+        if event_type == "SettingsApplied":
+            return pending_messages
+        if event_type == "Error":
+            description = payload.get("description", payload.get("message", "Voice Agent settings failed"))
+            raise RuntimeError(description)
+
+        pending_messages.append(raw_message)
 
 
 # ─── Schemas ─────────────────────────────────────────────────────────────────
@@ -174,7 +233,7 @@ class CallSessionOut(BaseModel):
 
 
 class EndCallRequest(BaseModel):
-    transcript: str | None = None  # Final transcript if not already saved via WS
+    transcript: str | None = None
 
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
@@ -189,7 +248,6 @@ def start_call(
     report = _get_report_for_project(db, project_id, report_id)
     rid = _parse_uuid(report_id, "report_id")
 
-    # Check for existing active session (partial unique index will also catch this)
     active = (
         db.query(CallSession)
         .filter(CallSession.report_id == rid, CallSession.status == "active")
@@ -198,7 +256,6 @@ def start_call(
     if active:
         raise HTTPException(409, "An active call session already exists for this report")
 
-    # Transition report status to recording
     transition_status(report, "recording")
 
     session = CallSession(report_id=rid)
@@ -246,7 +303,6 @@ def end_call(
             "or send the final transcript in the end-call request body.",
         )
 
-    # End the session only after we know we have durable transcript input.
     now = datetime.now(timezone.utc)
     session.status = "ended"
     session.ended_at = now
@@ -254,11 +310,9 @@ def end_call(
         session.duration_seconds = int((now - session.started_at).total_seconds())
     session.full_transcript = final_transcript
 
-    # Transition report to processing
     transition_status(report, "processing")
     db.commit()
 
-    # Set up progress queue and kick off pipeline
     from queue import Queue
     from backend.api.reports import report_progress_queues
     from backend.pipeline.orchestrator import run_report_pipeline
@@ -277,7 +331,7 @@ def end_call(
     return {"status": "processing", "call_id": call_id}
 
 
-# ─── WebSocket Live Transcription ────────────────────────────────────────────
+# ─── WebSocket Voice Agent ───────────────────────────────────────────────────
 
 
 @router.websocket("/{call_id}/stream")
@@ -287,10 +341,15 @@ async def call_stream(
     report_id: str,
     call_id: str,
 ):
-    """WebSocket for live audio transcription via Deepgram."""
+    """WebSocket proxy to Deepgram Voice Agent API.
+
+    Browser sends raw linear16 PCM audio.
+    Backend forwards to Deepgram Agent, which handles STT + LLM + TTS.
+    Agent responses are forwarded back to the browser.
+    """
     await websocket.accept()
 
-    # Validate call session exists and is active
+    # Validate call session
     db = next(get_db())
     try:
         rid = _parse_uuid(report_id, "report_id")
@@ -313,153 +372,149 @@ async def call_stream(
     finally:
         db.close()
 
-    conversation_turns: list[dict[str, str]] = []
-    pending_user_segments: list[str] = []
-
     deepgram_api_key = os.getenv("DEEPGRAM_API_KEY", "")
     if not deepgram_api_key:
+        await websocket.send_json({"type": "error", "message": "DEEPGRAM_API_KEY not configured"})
+        await websocket.close(code=4003)
+        return
+
+    from backend.pipeline import config
+    groq_api_key = config.GROQ_API_KEY or ""
+    if not groq_api_key:
         await websocket.send_json(
-            {"type": "error", "message": "DEEPGRAM_API_KEY not configured"}
+            {"type": "error", "message": "GROQ_API_KEY not configured for voice agent analysis"}
         )
         await websocket.close(code=4003)
         return
 
-    try:
-        from deepgram import AsyncDeepgramClient
-        from deepgram.core.events import EventType
+    conversation_turns: list[dict[str, str]] = []
+    audio_buffer = bytearray()
+    send_lock = asyncio.Lock()
+    last_assistant_text = ""
 
-        dg_client = AsyncDeepgramClient(api_key=deepgram_api_key)
-        send_lock = asyncio.Lock()
-        assistant_audio_tasks: set[asyncio.Task] = set()
-
-        async with dg_client.listen.v1.connect(
-            model="nova-3",
-            language="en",
-            smart_format="true",
-            interim_results="true",
-            utterance_end_ms=_CALL_UTTERANCE_END_MS,
-            vad_events="true",
-        ) as dg_connection:
-            async def send_event(payload: dict) -> None:
-                async with send_lock:
-                    await websocket.send_json(payload)
-
-            async def send_assistant_audio(text: str, done: bool) -> None:
-                try:
-                    audio_base64 = await _synthesize_assistant_audio(dg_client, text)
-                    if not audio_base64:
-                        return
-                    await send_event(
-                        {
-                            "type": "assistant_audio",
-                            "text": text,
-                            "audio_base64": audio_base64,
-                            "mime_type": "audio/mpeg",
-                            "done": done,
-                        }
-                    )
-                except Exception as exc:
-                    logger.warning("Assistant audio generation failed: %s", exc)
-
-            async def emit_assistant_turn(text: str, done: bool) -> None:
-                if not text:
-                    return
-                conversation_turns.append({"speaker": "agent", "text": text})
-                await send_event({"type": "assistant_text", "text": text, "done": done})
-                task = asyncio.create_task(send_assistant_audio(text, done))
-                assistant_audio_tasks.add(task)
-                task.add_done_callback(assistant_audio_tasks.discard)
-
-            async def maybe_advance_interviewer():
-                utterance = " ".join(segment.strip() for segment in pending_user_segments if segment.strip()).strip()
-                pending_user_segments.clear()
-                if not utterance:
-                    return
-
-                conversation_turns.append({"speaker": "user", "text": utterance})
-                next_turn = await asyncio.to_thread(_generate_next_question, list(conversation_turns))
-                assistant_text = str(next_turn.get("question", "")).strip()
-                if assistant_text:
-                    await emit_assistant_turn(assistant_text, bool(next_turn.get("done", False)))
-
-            async def on_message(result):
-                try:
-                    result_type = getattr(result, "type", None)
-                    if result_type == "UtteranceEnd":
-                        await maybe_advance_interviewer()
-                        return
-
-                    if result_type != "Results":
-                        return
-
-                    channel = getattr(result, "channel", None)
-                    alternatives = getattr(channel, "alternatives", None) or []
-                    if not alternatives:
-                        return
-
-                    transcript = getattr(alternatives[0], "transcript", "")
-                    is_final = bool(getattr(result, "is_final", False))
-                    if not transcript:
-                        return
-
-                    if is_final:
-                        pending_user_segments.append(transcript)
-                        await send_event({"type": "final", "text": transcript})
-                    else:
-                        await send_event({"type": "partial", "text": transcript})
-                except Exception as e:
-                    logger.warning("Error processing Deepgram result: %s", e)
-
-            async def on_error(error):
-                logger.error("Deepgram error: %s", error)
-                try:
-                    await send_event(
-                        {"type": "error", "message": "Deepgram transcription failed"}
-                    )
-                except Exception:
-                    pass
-
-            dg_connection.on(EventType.MESSAGE, on_message)
-            dg_connection.on(EventType.ERROR, on_error)
-
-            listening_task = asyncio.create_task(dg_connection.start_listening())
-            await send_event({"type": "ready", "message": "Transcription started"})
-            initial_turn = await asyncio.to_thread(_generate_next_question, list(conversation_turns))
-            initial_text = str(initial_turn.get("question", "")).strip()
-            if initial_text:
-                await emit_assistant_turn(initial_text, bool(initial_turn.get("done", False)))
-
+    async def send_event(payload: dict) -> None:
+        async with send_lock:
             try:
-                while True:
-                    data = await websocket.receive_bytes()
-                    await dg_connection.send_media(data)
-            except WebSocketDisconnect:
-                logger.info("Client disconnected from call %s", call_id)
-            finally:
+                await websocket.send_json(payload)
+            except Exception:
+                pass
+
+    try:
+        import websockets
+
+        agent_url = _DEEPGRAM_AGENT_WS_URL
+        agent_headers = {"Authorization": f"Token {deepgram_api_key}"}
+
+        async with websockets.connect(agent_url, additional_headers=agent_headers) as agent_ws:
+            welcome_raw = await asyncio.wait_for(agent_ws.recv(), timeout=10)
+            if not isinstance(welcome_raw, str):
+                raise RuntimeError("Voice Agent connection did not return a Welcome payload")
+
+            welcome = json.loads(welcome_raw)
+            if welcome.get("type") != "Welcome":
+                raise RuntimeError(f"Unexpected initial Voice Agent event: {welcome.get('type')!r}")
+
+            settings = _build_agent_settings(config.SYNTHESIS_MODEL, groq_api_key)
+            await agent_ws.send(json.dumps(settings))
+            pending_agent_messages = await _await_settings_applied(agent_ws)
+
+            await send_event({"type": "ready", "message": "Voice agent connected"})
+
+            async def handle_agent_message(msg: str | bytes) -> None:
+                nonlocal audio_buffer, last_assistant_text
+                if isinstance(msg, bytes):
+                    audio_buffer.extend(msg)
+                    return
+
                 try:
-                    await dg_connection.send_finalize()
-                except Exception:
-                    pass
+                    data = json.loads(msg)
+                except json.JSONDecodeError:
+                    logger.warning("Ignoring non-JSON agent message")
+                    return
+
+                event_type = data.get("type", "")
+
+                if event_type == "ConversationText":
+                    role = data.get("role", "")
+                    content = data.get("content", "")
+                    if role == "assistant":
+                        if _append_conversation_turn(conversation_turns, "agent", content):
+                            last_assistant_text = content.strip()
+                            await send_event({"type": "assistant_text", "text": last_assistant_text})
+                    elif role == "user":
+                        if _append_conversation_turn(conversation_turns, "user", content):
+                            await send_event({"type": "final", "text": content.strip()})
+                    return
+
+                if event_type == "AgentStartedSpeaking":
+                    audio_buffer.clear()
+                    return
+
+                if event_type == "AgentAudioDone":
+                    if audio_buffer:
+                        wav_data = _make_wav(bytes(audio_buffer), _AGENT_SAMPLE_RATE)
+                        b64 = base64.b64encode(wav_data).decode("ascii")
+                        await send_event({
+                            "type": "assistant_audio",
+                            "text": last_assistant_text,
+                            "audio_base64": b64,
+                            "mime_type": "audio/wav",
+                        })
+                        audio_buffer.clear()
+                    return
+
+                if event_type == "UserStartedSpeaking":
+                    audio_buffer.clear()
+                    await send_event({"type": "user_speaking"})
+                    return
+
+                if event_type in ("Error", "Warning"):
+                    desc = data.get("description", data.get("message", "Agent error"))
+                    logger.warning("Agent %s: %s", event_type, desc)
+                    if event_type == "Error":
+                        await send_event({"type": "error", "message": desc})
+
+            async def agent_to_browser():
                 try:
-                    await dg_connection.send_close_stream()
-                except Exception:
-                    pass
-                listening_task.cancel()
+                    for pending_message in pending_agent_messages:
+                        await handle_agent_message(pending_message)
+
+                    async for msg in agent_ws:
+                        await handle_agent_message(msg)
+                except websockets.ConnectionClosed:
+                    logger.info("Agent WebSocket closed")
+
+            # ── Forward browser audio → agent ──
+            async def browser_to_agent():
                 try:
-                    await listening_task
-                except asyncio.CancelledError:
+                    while True:
+                        data = await websocket.receive_bytes()
+                        await agent_ws.send(data)
+                except WebSocketDisconnect:
+                    logger.info("Client disconnected from call %s", call_id)
+                except Exception as e:
+                    logger.warning("Browser→agent forward error: %s", e)
+
+            # Run both directions concurrently
+            tasks = [
+                asyncio.create_task(agent_to_browser()),
+                asyncio.create_task(browser_to_agent()),
+            ]
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                exc = task.exception()
+                if exc and not isinstance(exc, asyncio.CancelledError):
+                    raise exc
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
                     pass
-                if assistant_audio_tasks:
-                    for task in list(assistant_audio_tasks):
-                        if not task.done():
-                            task.cancel()
-                    await asyncio.gather(*assistant_audio_tasks, return_exceptions=True)
 
     except ImportError as e:
-        logger.error("Deepgram SDK import failed: %s", e)
-        await websocket.send_json(
-            {"type": "error", "message": f"Deepgram SDK import failed: {e}"}
-        )
+        logger.error("websockets import failed: %s", e)
+        await websocket.send_json({"type": "error", "message": f"Missing dependency: {e}"})
         await websocket.close(code=4001)
         return
     except Exception as e:
@@ -469,10 +524,7 @@ async def call_stream(
         except Exception:
             pass
     finally:
-        if pending_user_segments:
-            utterance = " ".join(segment.strip() for segment in pending_user_segments if segment.strip()).strip()
-            if utterance:
-                conversation_turns.append({"speaker": "user", "text": utterance})
+        # Save transcript
         if conversation_turns:
             full_transcript = _format_conversation_transcript(conversation_turns)
             db = next(get_db())

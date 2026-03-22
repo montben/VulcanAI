@@ -67,47 +67,31 @@ function generateId() {
 const TRANSCRIPT = [
   {
     role: "ai" as const,
-    text: "Hey, I'm looking at your 5 photos from today. Looks like framing work — can you tell me what got done?",
+    text: "How'd today go out there?",
   },
   {
     role: "worker" as const,
-    text: "Yeah, we finished the second floor wall framing today. Got all the exterior walls up.",
+    text: "Pretty good day actually. We got all the second floor exterior walls framed up. Had six guys — three framers, two electricians starting rough-in on first floor, and a plumber.",
   },
   {
     role: "ai" as const,
-    text: "Got it. How many guys on site today, and what trades?",
+    text: "Nice, solid progress. Any materials come in to keep things moving?",
   },
   {
     role: "worker" as const,
-    text: "Six total. Three framers, two electricians starting rough-in, and a plumber.",
+    text: "Yeah, lumber delivery showed up around 10. Got the electrical panels too. Oh and the temp railing on the stairwell opening needs to be resecured — I already flagged it with the foreman.",
   },
   {
     role: "ai" as const,
-    text: "Any deliveries arrive today?",
+    text: "Good catch on the railing. What's lined up for tomorrow?",
   },
   {
     role: "worker" as const,
-    text: "Lumber delivery came in around 10. We also got the electrical panels.",
+    text: "Roof trusses getting delivered first thing. Crane should be on site by 7.",
   },
   {
     role: "ai" as const,
-    text: "Any safety concerns or issues I should note?",
-  },
-  {
-    role: "worker" as const,
-    text: "The temp railing on the stairwell opening needs to be secured. I flagged it with the foreman.",
-  },
-  {
-    role: "ai" as const,
-    text: "Got it — I'll flag that in the report. Anything planned for tomorrow?",
-  },
-  {
-    role: "worker" as const,
-    text: "Roof trusses getting delivered in the morning. Crane should be here by 7.",
-  },
-  {
-    role: "ai" as const,
-    text: "Perfect. I have everything I need. Generating your report now.",
+    text: "Sounds like a big day. I've got everything I need — generating your report now.",
   },
 ];
 
@@ -317,7 +301,7 @@ function CallStep({ onFinish }: { onFinish: () => void }) {
 
   // Progressive transcript
   useEffect(() => {
-    const delays = [800, 3500, 6500, 9000, 12000, 14500, 17500, 20000, 23000, 25500, 28000];
+    const delays = [800, 2500, 6500, 8500, 13000, 15500, 19000];
     const timers = TRANSCRIPT.map((msg, i) =>
       setTimeout(() => {
         setMessages((prev) => [...prev, msg]);
@@ -327,7 +311,7 @@ function CallStep({ onFinish }: { onFinish: () => void }) {
     // After last message, finish
     const finishTimer = setTimeout(() => {
       onFinish();
-    }, 30000);
+    }, 22000);
 
     return () => {
       timers.forEach(clearTimeout);

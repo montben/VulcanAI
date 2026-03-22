@@ -22,7 +22,6 @@ from backend.models.db import (
 from backend.utils.status import transition_status
 
 from .agents import (
-    analyze_photos_batch,
     analyze_transcript,
     review_report,
     synthesize_structured_report,
@@ -82,6 +81,22 @@ def _get_project_members(db, project_id: UUID) -> list[str]:
     return [link.member.name for link in links if link.member]
 
 
+def _collect_photo_descriptions(photos: list) -> list[dict[str, str]]:
+    """Return photo filenames and captions without running any vision analysis."""
+    descriptions: list[dict[str, str]] = []
+    for photo in sorted(photos, key=lambda item: item.sort_order):
+        filename = photo.original_filename or os.path.basename(photo.file_path)
+        descriptions.append(
+            {
+                "filename": filename,
+                "caption": photo.caption or "",
+                # The no-vision flow intentionally leaves AI detail blank.
+                "ai_description": "",
+            }
+        )
+    return descriptions
+
+
 def run_report_pipeline(
     report_id: UUID,
     quality_mode: str = "standard",
@@ -97,7 +112,7 @@ def run_report_pipeline(
       2. Aggregate transcript
       3. Resolve weather
       4. Analyze transcript (LLM)
-      5. Analyze photos (vision LLM)
+      5. Collect photo metadata (no vision model)
       6. Synthesize structured report (LLM)
       7. Optional review (LLM)
       8. Save generated report
@@ -159,27 +174,17 @@ def run_report_pipeline(
         else:
             _emit(progress_queue, {"stage": "analyzing_transcript", "message": "No transcript data — skipping"})
 
-        # ── 5. Analyze photos ────────────────────────────────────────────
+        # ── 5. Collect photo metadata (no vision analysis) ──────────────
         photos = sorted(report.photos, key=lambda p: p.sort_order)
         photo_descriptions: list[dict] = []
         if photos:
             _emit(progress_queue, {
                 "stage": "analyzing_photos",
-                "message": f"Analyzing {len(photos)} photos",
-                "photo": 0,
+                "message": f"Attaching {len(photos)} photos and captions",
+                "photo": len(photos),
                 "total": len(photos),
             })
-
-            def _photo_progress(completed: int, total: int) -> None:
-                _emit(progress_queue, {
-                    "stage": "analyzing_photos",
-                    "message": f"Analyzed photo {completed}/{total}",
-                    "photo": completed,
-                    "total": total,
-                })
-
-            photo_descriptions = analyze_photos_batch(photos, db, on_progress=_photo_progress)
-            db.commit()
+            photo_descriptions = _collect_photo_descriptions(photos)
         else:
             _emit(progress_queue, {"stage": "analyzing_photos", "message": "No photos attached — skipping"})
 

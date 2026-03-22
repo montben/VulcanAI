@@ -566,6 +566,23 @@ def finalize_report(
     """Validate the report JSON, generate a PDF, and transition to finalized."""
     report = _get_report_for_project(db, project_id, report_id)
     rid = _parse_uuid(report_id, "report_id")
+    existing_latest = (
+        db.query(GeneratedReport)
+        .filter(GeneratedReport.report_id == rid)
+        .order_by(GeneratedReport.created_at.desc())
+        .first()
+    )
+
+    # Idempotent fast path: if the report is already finalized and we have a PDF,
+    # return it instead of trying to finalize a second time.
+    if (
+        not body.report_json
+        and report.status == "finalized"
+        and existing_latest
+        and existing_latest.pdf_path
+        and os.path.exists(existing_latest.pdf_path)
+    ):
+        return {"pdf_url": f"/api/projects/{project_id}/reports/{report_id}/pdf"}
 
     # Get report JSON
     if body.report_json:
@@ -607,12 +624,7 @@ def finalize_report(
     pdf_path = generate_pdf_node(structured, photo_rows, pdf_dir)
 
     # Update or create GeneratedReport with pdf_path
-    latest = (
-        db.query(GeneratedReport)
-        .filter(GeneratedReport.report_id == rid)
-        .order_by(GeneratedReport.created_at.desc())
-        .first()
-    )
+    latest = existing_latest
 
     if latest:
         latest.report_json = report_data
@@ -623,7 +635,8 @@ def finalize_report(
 
     # Transition to finalized
     from backend.utils.status import transition_status
-    transition_status(report, "finalized")
+    if report.status != "finalized":
+        transition_status(report, "finalized")
     db.commit()
 
     return {"pdf_url": f"/api/projects/{project_id}/reports/{report_id}/pdf"}

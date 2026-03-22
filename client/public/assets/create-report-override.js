@@ -4,7 +4,8 @@ const PROJECT_ROUTE = /^#\/project\/([^/]+)$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const OVERLAY_ID = "codex-create-report-override";
 const STORAGE_KEY = "sitescribe:lastProjectId";
-const INITIAL_CALL_PROMPT = "Tell me what got done on site today.";
+const INITIAL_CALL_PROMPT = "How'd today go out there?";
+const AGENT_SAMPLE_RATE = 16000;
 const INITIAL_ASSISTANT_FALLBACK_DELAY_MS = 4500;
 
 let state = null;
@@ -69,6 +70,10 @@ async function requestJson(path, options = {}) {
   return response.json();
 }
 
+function buildBackendUrl(path) {
+  return path.startsWith("/") ? `${BACKEND_URL}${path}` : path;
+}
+
 function getOverlay() {
   return document.getElementById(OVERLAY_ID);
 }
@@ -110,6 +115,23 @@ function cleanupResources() {
   if (state.ws) {
     try { state.ws.close(); } catch {}
     state.ws = null;
+  }
+
+  if (state.audioProcessor) {
+    try { state.audioProcessor.disconnect(); } catch {}
+    state.audioProcessor = null;
+  }
+  if (state.audioSource) {
+    try { state.audioSource.disconnect(); } catch {}
+    state.audioSource = null;
+  }
+  if (state.audioSink) {
+    try { state.audioSink.disconnect(); } catch {}
+    state.audioSink = null;
+  }
+  if (state.audioContext && state.audioContext.state !== "closed") {
+    try { state.audioContext.close(); } catch {}
+    state.audioContext = null;
   }
 
   if (state.mediaRecorder && state.mediaRecorder.state !== "inactive") {
@@ -722,28 +744,40 @@ async function startCall() {
         state.callConnecting = false;
         startCallTimer();
 
-        const recorder = new MediaRecorder(stream, {
-          mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-            ? "audio/webm;codecs=opus"
-            : "audio/webm",
+        // Capture raw PCM audio for Deepgram Voice Agent API
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)({
+          sampleRate: AGENT_SAMPLE_RATE,
         });
-        recorder.addEventListener("dataavailable", (chunkEvent) => {
-          if (isMicBlocked()) {
-            return;
+        state.audioContext = audioContext;
+        const source = audioContext.createMediaStreamSource(stream);
+        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+        const sink = audioContext.createGain();
+        sink.gain.value = 0;
+        source.connect(processor);
+        processor.connect(sink);
+        sink.connect(audioContext.destination);
+        processor.onaudioprocess = (e) => {
+          if (isMicBlocked()) return;
+          if (ws.readyState !== WebSocket.OPEN) return;
+          const float32 = e.inputBuffer.getChannelData(0);
+          const int16 = new Int16Array(float32.length);
+          for (let i = 0; i < float32.length; i++) {
+            const s = Math.max(-1, Math.min(1, float32[i]));
+            int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
           }
-          if (chunkEvent.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-            ws.send(chunkEvent.data);
-          }
-        });
-        recorder.start(250);
-        state.mediaRecorder = recorder;
-        scheduleInitialAssistantFallback();
+          ws.send(int16.buffer);
+        };
+        state.audioProcessor = processor;
+        state.audioSource = source;
+        state.audioSink = sink;
         render();
         return;
       }
 
       if (message.type === "assistant_text") {
         clearInitialAssistantFallback();
+        const lastAgent = state.messages.findLast((m) => m.speaker === "agent" && m.type === "final");
+        if (lastAgent && lastAgent.text === message.text) return;
         addAgentMessage(message.text);
         render();
         return;
@@ -752,6 +786,12 @@ async function startCall() {
       if (message.type === "assistant_audio") {
         clearInitialAssistantFallback();
         queueAssistantAudio(message.audio_base64, message.mime_type, message.text);
+        return;
+      }
+
+      if (message.type === "user_speaking") {
+        stopAssistantAudioPlayback();
+        render();
         return;
       }
 
@@ -816,6 +856,19 @@ function addAgentMessage(text) {
     return;
   }
   state.messages.push({ speaker: "agent", type: "final", text });
+}
+
+function stopAssistantAudioPlayback() {
+  if (!state) return;
+  if (state.currentAssistantAudio) {
+    try {
+      state.currentAssistantAudio.pause();
+      state.currentAssistantAudio.src = "";
+    } catch {}
+    state.currentAssistantAudio = null;
+  }
+  state.assistantAudioQueue = [];
+  state.assistantSpeaking = false;
 }
 
 function playNextAssistantAudio() {
@@ -883,6 +936,22 @@ function buildConversationTranscript() {
 }
 
 async function stopCallResources() {
+  if (state.audioProcessor) {
+    state.audioProcessor.disconnect();
+    state.audioProcessor = null;
+  }
+  if (state.audioSource) {
+    state.audioSource.disconnect();
+    state.audioSource = null;
+  }
+  if (state.audioSink) {
+    state.audioSink.disconnect();
+    state.audioSink = null;
+  }
+  if (state.audioContext && state.audioContext.state !== "closed") {
+    try { await state.audioContext.close(); } catch {}
+  }
+  state.audioContext = null;
   if (state.mediaRecorder && state.mediaRecorder.state !== "inactive") {
     await new Promise((resolve) => {
       state.mediaRecorder.addEventListener("stop", resolve, { once: true });
@@ -1050,6 +1119,17 @@ async function downloadPdf() {
     clearError();
     render();
 
+    const existingPdfUrl = state.reportData?.pdf_url;
+    if (existingPdfUrl) {
+      const anchor = document.createElement("a");
+      anchor.href = buildBackendUrl(existingPdfUrl);
+      anchor.download = "";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      return;
+    }
+
     // Call finalize endpoint — this generates the PDF via Node.js pipeline
     const result = await requestJson(
       `/api/projects/${state.projectId}/reports/${state.reportId}/finalize`,
@@ -1059,8 +1139,11 @@ async function downloadPdf() {
     // Download the PDF
     const pdfUrl = result.pdf_url;
     if (pdfUrl) {
+      if (state.reportData) {
+        state.reportData.pdf_url = pdfUrl;
+      }
       const anchor = document.createElement("a");
-      anchor.href = pdfUrl;
+      anchor.href = buildBackendUrl(pdfUrl);
       anchor.download = "";
       document.body.appendChild(anchor);
       anchor.click();
@@ -1102,6 +1185,10 @@ async function mountForRoute(projectId) {
     timerId: null,
     initialAssistantFallbackTimeout: null,
     ws: null,
+    audioContext: null,
+    audioSource: null,
+    audioProcessor: null,
+    audioSink: null,
     mediaRecorder: null,
     mediaStream: null,
     messages: [],
