@@ -226,13 +226,6 @@ function renderPhotoGrid() {
   return `
     <div class="grid grid-cols-3 gap-2 sm:grid-cols-4" data-testid="photo-grid">
       ${items}
-      <button
-        type="button"
-        class="flex aspect-square items-center justify-center rounded-md border-2 border-dashed border-border text-muted-foreground hover:border-primary/40 hover:text-primary hover:bg-card"
-        data-add-more
-      >
-        +
-      </button>
     </div>
   `;
 }
