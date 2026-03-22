@@ -33,6 +33,8 @@ _AGENT_TTS_MODEL = os.getenv("DEEPGRAM_TTS_MODEL", "aura-2-orpheus-en")
 _AGENT_SAMPLE_RATE = int(os.getenv("DEEPGRAM_AGENT_SAMPLE_RATE", "16000"))
 _AGENT_THINK_TEMPERATURE = float(os.getenv("DEEPGRAM_AGENT_THINK_TEMPERATURE", "0.3"))
 _AGENT_THINK_CONTEXT_LENGTH = os.getenv("DEEPGRAM_AGENT_THINK_CONTEXT_LENGTH", "max")
+# How long (ms) of silence after speech before the agent responds. Higher = more patient.
+_AGENT_ENDPOINTING_MS = int(os.getenv("DEEPGRAM_AGENT_ENDPOINTING_MS", "1200"))
 _DEEPGRAM_AGENT_WS_URL = os.getenv(
     "DEEPGRAM_AGENT_WS_URL",
     "wss://agent.deepgram.com/v1/agent/converse",
@@ -188,7 +190,7 @@ def _build_agent_settings(model: str, groq_api_key: str) -> dict[str, Any]:
             },
         },
         "agent": {
-            "listen": {"provider": listen_provider},
+            "listen": {"provider": listen_provider, "endpointing": _AGENT_ENDPOINTING_MS},
             "think": _build_agent_think_config(model, groq_api_key),
             "speak": {
                 "provider": {"type": "deepgram", "model": _AGENT_TTS_MODEL},
