@@ -154,7 +154,7 @@ def _normalize_structured_report_data(
                 or weather.get("summary")
                 or "Weather data unavailable"
             ),
-            "prepared_by": _string(raw_metadata.get("prepared_by") or metadata.get("prepared_by"), "SiteScribe AI"),
+            "prepared_by": _string(raw_metadata.get("prepared_by") or metadata.get("prepared_by"), "Vulcan AI"),
         },
         "summary": _string(data.get("summary"), ""),
         "progress_update": _string(data.get("progress_update"), ""),

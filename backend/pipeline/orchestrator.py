@@ -195,7 +195,7 @@ def run_report_pipeline(
             "project_name": project.name,
             "report_date": str(report.report_date),
             "location": project.location_address or "",
-            "prepared_by": "SiteScribe AI",
+            "prepared_by": "Vulcan AI",
         }
 
         structured_report = synthesize_structured_report(

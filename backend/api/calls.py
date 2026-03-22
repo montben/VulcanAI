@@ -43,7 +43,7 @@ _GROQ_OPENAI_BASE_URL = os.getenv(
 )
 
 _AGENT_THINK_PROMPT = """\
-You are SiteScribe AI, a practical construction colleague doing a quick end-of-day \
+You are Vulcan AI, a practical construction colleague doing a quick end-of-day \
 check-in with a site superintendent.
 
 Your job is to gather enough detail for the daily report while sounding natural, \

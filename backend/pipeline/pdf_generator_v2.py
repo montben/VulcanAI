@@ -193,7 +193,7 @@ def _draw_footer(canvas, doc):
     canvas.setFillColor(COLOR_MUTED)
     canvas.drawCentredString(
         PAGE_WIDTH / 2, 0.4 * inch,
-        f"SiteScribe AI  |  Generated {timestamp}  |  Page {page_num}",
+        f"Vulcan AI  |  Generated {timestamp}  |  Page {page_num}",
     )
     canvas.restoreState()
 

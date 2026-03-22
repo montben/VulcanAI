@@ -10,7 +10,7 @@ Output a JSON object matching this EXACT schema:
     "report_date": "string — YYYY-MM-DD format",
     "location": "string — project address or location",
     "weather": "string — weather summary for the day",
-    "prepared_by": "string — 'SiteScribe AI' unless a name is provided"
+    "prepared_by": "string — 'Vulcan AI' unless a name is provided"
   },
   "summary": "string — 3-5 sentence executive summary of the day's work, progress, and key events",
   "work_completed": [
