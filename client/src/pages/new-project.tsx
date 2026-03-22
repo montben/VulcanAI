@@ -258,6 +258,7 @@ export default function NewProject() {
   }, []);
   const [coverPhotoUrl, setCoverPhotoUrl] = useState<string | null>(null);
   const [startDate, setStartDate] = useState("");
+  const dateInputRef = useRef<HTMLInputElement>(null);
   const [timeline, setTimeline] = useState("");
   const [siteManager, setSiteManager] = useState("");
   const [workerInput, setWorkerInput] = useState("");
@@ -470,12 +471,20 @@ export default function NewProject() {
             {/* Start date + timeline side by side */}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <FormField label="Start Date" icon={CalendarDays} testId="field-start-date">
-                <Input
-                  type="date"
-                  value={startDate}
-                  onChange={(e) => setStartDate(e.target.value)}
-                  data-testid="input-start-date"
-                />
+                <div className="relative">
+                  <Input
+                    ref={dateInputRef}
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    data-testid="input-start-date"
+                    className="pr-9 [&::-webkit-calendar-picker-indicator]:hidden"
+                  />
+                  <CalendarDays
+                    className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground cursor-pointer"
+                    onClick={() => dateInputRef.current?.showPicker()}
+                  />
+                </div>
               </FormField>
 
               <FormField label="Expected Timeline" icon={Clock} testId="field-timeline">
